@@ -1,0 +1,4 @@
+# managed-by: kitty-zoxide-sessions
+@@open-directive@@
+cd @@session-path@@
+launch --var kitty_zoxide_session=@@session@@

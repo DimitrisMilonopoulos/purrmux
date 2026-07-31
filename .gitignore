@@ -1,0 +1,10 @@
+*__pycache__*
+.ruff_cache/
+override.conf
+
+# rc-pass is where kitty reads a remote control password from, in this very
+# directory — never commit it. The rest is churn kitty or an editor leaves
+# behind: *.auto.conf is written by kitty itself, *.bak by hand.
+rc-pass
+*.auto.conf
+*.bak
