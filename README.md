@@ -8,7 +8,7 @@ See [`KEYBINDS.md`](KEYBINDS.md) for the full cheatsheet. While running, `ctrl+s
 
 **Required**
 
-- [kitty](https://sw.kovidgoyal.net/kitty/) — recent enough to support `globinclude` and the `KITTY_OS` variable
+- [kitty](https://sw.kovidgoyal.net/kitty/) 0.48+ — the vertical tab bar (`tab_bar_edge left`) is the default here; on older versions see the `override.conf` note under [Vertical tab bar](#vertical-tab-bar-sidebar), which also needs `globinclude` and the `KITTY_OS` variable
 - Python 3 — ships with both distros; used by the tab bar and session/tab/tool scripts
 - [fish](https://fishshell.com/) — set as `shell` in `kitty.conf`; change the line (or use `override.conf` below) if you use zsh/bash
 - [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) — for the tab-bar icons and powerline glyphs
@@ -77,11 +77,13 @@ map ctrl+shift+h launch --type=tab --tab-title="keybinds" sh -c 'bat --color=alw
 
 ## Vertical tab bar (sidebar)
 
-kitty 0.48 can put the tab bar on the left or right edge (`tab_bar_edge left`). `ctrl+a>v` (or `v` in tab mode) toggles between the bottom strip and a sidebar at runtime — no restart, no config edit:
+kitty 0.48 can put the tab bar on the left or right edge, and this config uses that by default: `kitty.conf` sets `tab_bar_edge left` with `tab_title_max_length 26` and `tab_bar_align start`. `ctrl+a>v` (or `v` in tab mode) switches to the horizontal bar and back at runtime — no restart, no config edit:
 
 ```sh
-tab_bar/toggle-edge.py [toggle|on|off|left|right|status]
+tab_bar/toggle-edge.py [toggle|sidebar|horizontal|left|right|top|bottom|status]
 ```
+
+Both directions send their own overrides rather than one of them falling back to `kitty.conf`, so the toggle behaves the same whichever edge is configured — the config only decides how kitty starts. Sidebar means `left` + 26 title cells + top-aligned tabs; horizontal means `bottom` + unlimited titles + centred tabs. Adjust either set at the top of `tab_bar/toggle-edge.py`.
 
 There is no remote-control command for setting an option, so the script reloads the config with `tab_bar_edge`/`tab_title_max_length`/`tab_bar_align` overrides (`kitten @ load-config -o …`) and reloads without them to go back. Being a config reload, it also resets runtime-only tweaks such as `set_background_opacity` to their configured values. State lives in `$XDG_RUNTIME_DIR/kitty-tab-bar-edge-*`, per kitty instance.
 
@@ -93,7 +95,7 @@ The custom tab bar draws a different layout in sidebar mode (`tab_bar/vertical.p
 
 Knobs at the top of `tab_bar/config.py`: `VERTICAL_ACTIVE_MARKER`, `VERTICAL_SEPARATOR`, `VERTICAL_SHOW_STATUS`, `VERTICAL_SHOW_AGENT_STATUS`, `VERTICAL_FOOTER_STYLE`, `VERTICAL_FOOTER_ICON_COLORS`, and `VERTICAL_SECONDARY_TEXT_SCALE` (font size of the status and hint rows, via kitty's text sizing protocol — chips can't scale, their borders are glyphs). Sidebar side and width live in `tab_bar/toggle-edge.py` (`SIDEBAR_EDGE`, `SIDEBAR_CELLS`).
 
-To start in sidebar mode instead, put `tab_bar_edge left` in `override.conf`.
+To start with the horizontal bar instead, put `tab_bar_edge bottom`, `tab_bar_align center` and `tab_title_max_length 0` in `override.conf` — the same values the toggle sends. That's also the fix on kitty older than 0.48, where `left` is not a valid edge.
 
 ## Agent attention hooks
 

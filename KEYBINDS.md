@@ -7,6 +7,7 @@ Leader-style mode switches: enter a mode, press keys, `esc` / `enter` / same mod
 - `ctrl+shift+enter` — new window (cwd)
 - `ctrl+shift+t` — new tab (cwd)
 - `alt+h` / `alt+j` / `alt+k` / `alt+l` — focus pane left / down / up / right
+- `ctrl+shift+up` / `ctrl+shift+down` — previous / next tab (replaces kitty's line-scroll defaults)
 - `alt+]` / `alt+[` — cycle to next / previous session
 - `ctrl+shift+/` — show this keybinds overlay
 
@@ -64,7 +65,7 @@ Unknown keys pass through to the running program (lets shell/app shortcuts bypas
 - `ctrl+a` → `b` — btop overlay
 - `ctrl+a` → `v` — toggle the vertical tab bar (sidebar)
 
-## Global
+## Outside kitty
 
 - Quake dropdown session picker — bind a compositor hotkey to
   `kitten quick-access-terminal python3 ~/.config/kitty/session-management/kitty-zoxide-sessions.py --ansi --target=window --main-listen-on auto`

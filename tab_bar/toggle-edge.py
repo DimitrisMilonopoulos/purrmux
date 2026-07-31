@@ -1,13 +1,15 @@
 #!/usr/bin/env python3
-"""Toggle the kitty tab bar between its configured edge and a vertical sidebar.
+"""Switch the kitty tab bar between the vertical sidebar and the horizontal bar.
 
 kitty 0.48 added vertical tabs (``tab_bar_edge left|right``) but there is no
 remote-control command to set an option directly. ``load-config`` does accept
 overrides though, and reloading re-reads ``tab_bar_edge``
 (``TabBar.apply_options``), so the edge switches live without restarting kitty.
 
-Sidebar on  -> reload with ``tab_bar_edge``/``tab_title_max_length`` overrides.
-Sidebar off -> reload with no overrides, i.e. straight back to kitty.conf.
+Both directions pass their own overrides rather than one of them relying on
+kitty.conf, so the toggle behaves the same whichever edge is configured as the
+default — kitty.conf then only decides how kitty starts up (currently the
+sidebar).
 
 Because each call passes ``--ignore-overrides``, the overrides never stack up
 across toggles; the flip side is that ``-o`` flags given on kitty's own command
@@ -15,7 +17,7 @@ line are dropped too (this config uses none). Toggling reloads the config, so
 runtime-only tweaks such as ``set_background_opacity`` reset to their
 configured values, exactly as any other config reload would.
 
-Usage: toggle-edge.py [toggle|on|off|left|right|status]
+Usage: toggle-edge.py [toggle|sidebar|horizontal|left|right|top|bottom|status]
 """
 
 import os
@@ -27,10 +29,19 @@ from pathlib import Path
 
 FD_RE = re.compile(r"fd:(\d+)")
 
+VERTICAL_EDGES = ("left", "right")
+
 # Which side the sidebar appears on, and how wide it is in title cells (kitty
-# sizes the sidebar from tab_title_max_length; unset it defaults to ~20).
+# sizes the sidebar from tab_title_max_length; unset it defaults to ~20). Tabs
+# start at the top so the status footer can have the bottom.
 SIDEBAR_EDGE = "left"
 SIDEBAR_CELLS = 26
+SIDEBAR_ALIGN = "start"
+
+# Where the horizontal bar goes, centred and with titles unlimited, as it was
+# before the sidebar became the default.
+HORIZONTAL_EDGE = "bottom"
+HORIZONTAL_ALIGN = "center"
 
 
 def state_path() -> Path:
@@ -43,10 +54,11 @@ def state_path() -> Path:
 
 
 def read_state() -> str:
+    """The edge in effect, defaulting to how kitty.conf starts kitty up."""
     try:
         return state_path().read_text(encoding="utf-8").strip()
     except OSError:
-        return "off"
+        return SIDEBAR_EDGE
 
 
 def write_state(edge: str) -> None:
@@ -84,15 +96,17 @@ def remote_control(*args: str) -> None:
 
 
 def apply(edge: str) -> None:
-    if edge == "off":
-        remote_control()
-    else:
+    if edge in VERTICAL_EDGES:
         remote_control(
             "-o", f"tab_bar_edge={edge}",
             "-o", f"tab_title_max_length={SIDEBAR_CELLS}",
-            # Tabs from the top of the sidebar; the status footer fills the
-            # bottom. (kitty.conf centers the horizontal bar instead.)
-            "-o", "tab_bar_align=start",
+            "-o", f"tab_bar_align={SIDEBAR_ALIGN}",
+        )
+    else:
+        remote_control(
+            "-o", f"tab_bar_edge={edge}",
+            "-o", "tab_title_max_length=0",
+            "-o", f"tab_bar_align={HORIZONTAL_ALIGN}",
         )
     write_state(edge)
 
@@ -105,10 +119,12 @@ def main(argv: list[str]) -> int:
         print(current)
         return 0
     if action == "toggle":
-        target = "off" if current in ("left", "right") else SIDEBAR_EDGE
-    elif action == "on":
+        target = HORIZONTAL_EDGE if current in VERTICAL_EDGES else SIDEBAR_EDGE
+    elif action == "sidebar":
         target = SIDEBAR_EDGE
-    elif action in ("off", "left", "right"):
+    elif action == "horizontal":
+        target = HORIZONTAL_EDGE
+    elif action in (*VERTICAL_EDGES, "top", "bottom"):
         target = action
     else:
         print(__doc__, file=sys.stderr)
