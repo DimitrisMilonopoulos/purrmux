@@ -33,9 +33,46 @@ See [`KEYBINDS.md`](KEYBINDS.md) for the full cheatsheet. While running, `ctrl+s
 
 ```sh
 git clone <this-repo> ~/.config/kitty
+~/.config/kitty/setup.sh
 ```
 
-The `startup_session` and all script paths assume `~/.config/kitty`; if you clone elsewhere you'll need to adjust `kitty.conf` and the `keybinds.conf` launch lines.
+`setup.sh` seeds `override.conf`, the gitignored file where your own settings go — see [Customizing without forking](#customizing-without-forking). It's safe to rerun: an existing `override.conf` is never overwritten. Skipping it costs you nothing but that starting point, since `globinclude` ignores the file when it's absent.
+
+The `startup_session` and all script paths assume `~/.config/kitty`; if you clone elsewhere you'll need to adjust `kitty.conf` and the `keybinds.conf` launch lines — `setup.sh` warns you when the checkout isn't there.
+
+## Launch it with `--single-instance`
+
+Sessions here are OS windows inside **one** kitty process, and every cross-session feature drives that process through its single remote-control socket (`kitten @ ls`, `focus-window`, …). So launch kitty as:
+
+```sh
+kitty --single-instance
+```
+
+Put the flag wherever you launch from — a compositor keybind, a `.desktop` file's `Exec=`, or a shell alias. Without it every `kitty` invocation is a separate process with its own socket, and these quietly narrow to "only sees its own window":
+
+- `alt+]` / `alt+[` — session cycling; `cycle-session.py` enumerates the tabs on one socket, so other instances' sessions aren't in the rotation
+- `ctrl+a>k` with `--target=window` — the session opens in the instance you invoked it from; separate processes each accumulate their own unrelated set
+- `ctrl+a>a` and `ctrl+a>o` — "every agent across all sessions" means every agent in *this* instance
+- the quake dropdown's `--main-listen-on auto` — `discover_main_listen_on()` takes the first socket it finds and warns `multiple kitty instances found`; export `KITTY_MAIN_LISTEN_ON` to pin one if you really do run several (or give each pool its own `--instance-group NAME`)
+
+### Making it the default on macOS
+
+There is no `kitty.conf` option for `--single-instance`; it is command-line only. macOS won't let you attach arguments to a GUI app either, so kitty reads them from a file instead — which this repo ships as [`macos-launch-services-cmdline`](macos-launch-services-cmdline):
+
+```
+--single-instance
+```
+
+kitty reads `<kitty config dir>/macos-launch-services-cmdline` "when it is launched from the GUI, i.e. by clicking the kitty application icon or using `open -a kitty`" ([FAQ](https://sw.kovidgoyal.net/kitty/faq/#how-do-i-specify-command-line-options-for-kitty-on-macos)). Since the file lives next to `kitty.conf`, cloning this repo to `~/.config/kitty` puts it in place already — nothing to configure. Two things to know about it:
+
+- It's parsed as shell syntax, so it takes no comments — a `#` would be passed to kitty as an argument. Keep it to flags.
+- It's ignored on Linux and by direct binary invocations, so it's harmless to keep in a shared config.
+
+That covers the Dock, Finder, Spotlight, Login Items (System Settings → General → Login Items, for launching at boot) and `open -a kitty`. What it does **not** cover is calling the binary directly — `kitty` on your `PATH`, or `/Applications/kitty.app/Contents/MacOS/kitty`. For those, either invoke `open -a kitty` instead (it picks the flag up from the file), or pass the flag yourself; if you launch from a shell often, `alias kitty='kitty --single-instance'` in `~/.config/fish/config.fish` covers it, and a wrapper script earlier on `PATH` covers hotkey tools like skhd or Raycast that don't read your shell config.
+
+The flip side of one instance on macOS: `cmd+q` quits it, taking every session with it, and `cmd+w` closes windows within it. Worth knowing before reaching for either out of habit.
+
+Getting the flag onto the *first* instance is the part that matters: the single-instance socket is only created by an instance that itself started with `--single-instance`, so a GUI-launched kitty without it is invisible to a later `kitty --single-instance` and you end up with two pools anyway. Leave `macos_quit_when_last_window_closed` at its default (`no`) so the instance outlives its last window and subsequent launches reattach.
 
 ## Platform support
 
@@ -49,6 +86,11 @@ Currently split that way:
 
 - **`listen_on`** — Linux uses an abstract unix socket (`unix:@kitty-…`); macOS uses a filesystem socket under `/tmp`.
 - **`bell_path`** — Linux points at the freedesktop stereo bell; macOS falls back to kitty's default bell (add your own `bell_path /System/Library/Sounds/Glass.aiff` in `os-macos.conf` if desired).
+- **`macos_option_as_alt yes`** (macOS) — every leader key here is Alt-based (`alt+p`, `alt+t`, `alt+s`, `alt+o`, `alt+g`, `alt+hjkl`, `alt+[` / `alt+]`), and kitty's default `no` makes Option produce Unicode input instead, which would leave all of them dead. The trade is Option-composed characters (`é`, `ü`) — put `macos_option_as_alt left` in `override.conf` to keep right-Option for input.
+- **`cmd+t` / `cmd+enter`** (macOS) — kitty defines these as plain `new_tab` / `new_window`, skipping the cwd-aware overrides `keybinds.conf` puts on `ctrl+shift+t` / `ctrl+shift+enter`. `os-macos.conf` repoints them at `new_tab_with_cwd` / `new_window_with_cwd` so new tabs and windows join the current session whichever key you reach for.
+- **scrollback overlays** — `kitty_mod+i` (nvim pager) and `kitty_mod+m` (scrollback as markdown) live in `os-linux.conf` only. `kitty_mod+i` copies over to `os-macos.conf` as-is; `kitty_mod+m` does not, because `mktemp --suffix=.md` is GNU-only and BSD `mktemp` has no `--suffix`. Use `f=$(mktemp -d)/scrollback.md` there instead — the extension is what makes nvim's markdown rendering fire, so it can't just be dropped.
+
+Everything else in [`KEYBINDS.md`](KEYBINDS.md) is identical across the two: `kitty_mod` is `ctrl+shift` on both platforms, and the `ctrl+a>…` chords and in-mode keys are plain characters.
 
 ## Customizing without forking
 
@@ -58,22 +100,37 @@ Currently split that way:
 globinclude override.conf
 ```
 
-Drop a file named `override.conf` next to `kitty.conf` with any directives you want to change. Because it's included last, it overrides everything above it. Examples:
+`override.conf` sits next to `kitty.conf` and takes any directives you want to change. Because it's included last, it beats everything above it. `setup.sh` creates it for you (with just a comment header pointing back here); you can also write it by hand — the glob matches nothing when the file is absent, so there's no error either way.
+
+It's in `.gitignore`, which is the point: your settings live in the working tree without ever showing up in `git status` or clashing with a `git pull`. Reload after editing with `ctrl+shift+f5` — no restart.
+
+The knobs most worth knowing about:
 
 ```
 # override.conf
 
-# use zsh instead of fish
+# use zsh instead of fish (kitty.conf sets fish)
 shell zsh
 
 # dial opacity back
 background_opacity 0.9
 
+# start with the horizontal tab bar instead of the sidebar. These are the same
+# three values ctrl+a>v sends at runtime, and also the fix on kitty older than
+# 0.48, where `left` is not a valid tab_bar_edge
+tab_bar_edge bottom
+tab_bar_align center
+tab_title_max_length 0
+
+# macOS: keep right-Option free for composing accented characters (é, ü) at the
+# cost of the right side no longer acting as Alt for the leader keys
+macos_option_as_alt left
+
 # rebind the keybinds overlay
 map ctrl+shift+h launch --type=tab --tab-title="keybinds" sh -c 'bat --color=always --style=plain --language=md "$HOME/.config/kitty/KEYBINDS.md" | less -R'
 ```
 
-`override.conf` is gitignored, so it won't clash with `git pull`s. The glob matches nothing if the file is absent — no error.
+`allow_remote_control no` belongs here too if you want it — read the [Security note](#security-note) first, since it takes the session picker, pane picker, agent overview and tool tabs with it.
 
 ## Vertical tab bar (sidebar)
 
@@ -85,7 +142,7 @@ tab_bar/toggle-edge.py [toggle|sidebar|horizontal|left|right|top|bottom|status]
 
 Both directions send their own overrides rather than one of them falling back to `kitty.conf`, so the toggle behaves the same whichever edge is configured — the config only decides how kitty starts. Sidebar means `left` + 26 title cells + top-aligned tabs; horizontal means `bottom` + unlimited titles + centred tabs. Adjust either set at the top of `tab_bar/toggle-edge.py`.
 
-There is no remote-control command for setting an option, so the script reloads the config with `tab_bar_edge`/`tab_title_max_length`/`tab_bar_align` overrides (`kitten @ load-config -o …`) and reloads without them to go back. Being a config reload, it also resets runtime-only tweaks such as `set_background_opacity` to their configured values. State lives in `$XDG_RUNTIME_DIR/kitty-tab-bar-edge-*`, per kitty instance.
+There is no remote-control command for setting an option, so the script reloads the config with `tab_bar_edge`/`tab_title_max_length`/`tab_bar_align` overrides (`kitten @ load-config -o …`) and reloads without them to go back. Being a config reload, it also resets runtime-only tweaks such as `set_background_opacity` to their configured values. State lives in `$XDG_RUNTIME_DIR/kitty-tab-bar-edge-*`, per kitty instance, falling back to `/tmp` when that variable is unset — which is the normal case on macOS.
 
 The custom tab bar draws a different layout in sidebar mode (`tab_bar/vertical.py`):
 
