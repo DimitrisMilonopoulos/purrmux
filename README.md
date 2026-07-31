@@ -15,7 +15,7 @@ See [`KEYBINDS.md`](KEYBINDS.md) for the full cheatsheet. While running, `ctrl+s
 
 **Used by the keybinds / overlays**
 
-- [fzf](https://github.com/junegunn/fzf) — session picker, pane picker
+- [fzf](https://github.com/junegunn/fzf) 0.58+ — session picker, pane picker, agent picker and overview; 0.58 is where the `--list-border`/`--input-border`/`--preview-border` options the pickers use landed (tested with 0.74)
 - [zoxide](https://github.com/ajeetdsouza/zoxide) — source of session candidates
 - [bat](https://github.com/sharkdp/bat) + `less` — render the `ctrl+shift+/` keybinds tab
 
