@@ -12,9 +12,14 @@ sidebar and drives ``draw_tab`` very differently from the horizontal case:
 * the whole tab bar screen is erased before the first call, so anything we
   draw outside our own row — the status footer here — survives.
 
-So: one chip per row from the top, and the status the horizontal bar keeps in
+So: one tab per row from the top, and the status the horizontal bar keeps in
 its side sections (git branch, keyboard mode and its hints) stacked in the
 spare space at the bottom.
+
+Those rows are kitty's to place, not ours. It builds the click map from the
+same ``start_row + i * tab_line_height`` it parks the cursor at, so drawing a
+tab anywhere else would focus the wrong tab on a click — which is why there is
+no room for a header row between groups of tabs.
 """
 
 from collections.abc import Callable
@@ -37,8 +42,11 @@ from .colors import get_colors, get_palette_color, get_status_color
 from .modes import get_current_mode, is_zoomed
 from .text import (
     get_session_branch,
+    get_sidebar_list_text,
     get_sidebar_session_text,
     get_sidebar_tab_text,
+    get_tab_icon,
+    get_tab_subtitle,
     get_wd,
     resolve_agent_status,
 )
@@ -46,6 +54,11 @@ from .text import (
 CHIP = "chip"
 HINT = "hint"
 MODE = "mode"
+SESSION = "session"
+GAP = "gap"
+# The rows a scaled-up row spills into. They draw nothing, and unlike a gap
+# they are not spare: shedding one would let the row above it overdraw.
+SPAN = "span"
 
 # Rows kitty gives each tab, and how many tabs it drew. Neither is passed to
 # draw_tab, so both are measured from the cursor rows of consecutive tabs and
@@ -89,7 +102,14 @@ def draw_dim(screen: Screen, row: int, text: str, width: int, start: int = 0) ->
 
 
 def draw_footer_cell(
-    screen: Screen, row: int, cell: Cell, width: int, start: int, marker: str = ""
+    screen: Screen,
+    row: int,
+    cell: Cell,
+    width: int,
+    start: int,
+    marker: str = "",
+    cells: int = 1,
+    scale: tuple[int, int] | None = None,
 ) -> None:
     screen.cursor.x = start
     screen.cursor.y = row
@@ -99,20 +119,24 @@ def draw_footer_cell(
         screen.cursor.fg = get_colors().accent_chip
         screen.draw(marker)
 
-    cell.draw(screen, max(1, width - len(marker)), config.VERTICAL_FOOTER_STYLE)
+    cell.draw(
+        screen, max(1, width - len(marker)), config.VERTICAL_FOOTER_STYLE, cells, scale
+    )
 
 
-def draw_separator(screen: Screen, column: int) -> None:
-    """Draw the rule dividing the sidebar from the panes, full height.
+def draw_rule(screen: Screen, column: int, rows: range, bg: int = 0) -> None:
+    """Draw the rule dividing the sidebar from the panes, over ``rows``.
 
     kitty has no option for a tab bar border, and it erases the tab bar screen
     before the first tab is drawn, so the whole column is painted from that
-    first call.
+    first call — then repainted over the rows an active band covered, this
+    time on the band's own background so the two meet with nothing between.
     """
-    for row in range(screen.lines):
+    for row in rows:
         screen.cursor.x = column
         screen.cursor.y = row
         reset_attrs(screen)
+        screen.cursor.bg = bg
         screen.cursor.fg = get_colors().muted_chip
         screen.draw(config.VERTICAL_SEPARATOR)
 
@@ -125,11 +149,13 @@ def footer_cell(
 ) -> Cell:
     """A footer row: icon coloured by role, text muted.
 
-    Attention keeps the accent treatment it has in the horizontal bar — bold
-    text — since it is the one row that means something is waiting.
+    Attention keeps the accent treatment it has in the horizontal bar — bold,
+    at full brightness — since it is the one row that means something is
+    waiting. The session name takes it too: it is the anchor of the block, and
+    weight is the only way to say so that costs no rows (see session_size).
     """
     icon_color = get_palette_color(config.VERTICAL_FOOTER_ICON_COLORS.get(role))
-    factory = accent_cell if role == "attention" else muted_cell
+    factory = accent_cell if role in ("attention", "session") else muted_cell
     return factory(icon, text_fn, tab, minimal_icon_fg=icon_color)
 
 
@@ -184,35 +210,89 @@ def hint_rows(mode: str, width: int) -> list[str]:
     return hint_rows_keys(mode)
 
 
-def footer_rows(tab: TabBarData, width: int) -> list[tuple[str, Any]]:
-    """The status rows to stack below the tabs, top-down."""
-    rows: list[tuple[str, Any]] = []
+def session_size() -> tuple[int, tuple[int, int] | None]:
+    """Cells and fraction for the session row, from a plain size multiplier.
 
+    The protocol only grows text a whole cell at a time, so a size like 3/2 is
+    two cells with the glyph drawn at three quarters of them. Returns the cells
+    to claim and the fraction to draw at, or no fraction at all when the row is
+    the same size as everything else.
+    """
+    numerator, denominator = config.VERTICAL_SESSION_SCALE
+    cells = max(1, -(-numerator // denominator))
+    if cells == 1 and numerator == denominator:
+        return 1, None
+    return cells, (numerator, denominator * cells)
+
+
+def footer_groups(tab: TabBarData, width: int) -> list[list[tuple[str, Any]]]:
+    """The status rows to stack below the tabs, top-down, in groups.
+
+    Two groups, split by what the rows answer. What is happening right now —
+    the keyboard mode with its hints, and any agent waiting on you — then
+    where you are: the branch and the session it belongs to. A blank row
+    between them, none inside.
+    """
     # Anything other than plain normal is worth a row: a keyboard mode, or the
     # zoom pseudo-mode, which get_mode_name derives from the layout while the
     # keyboard mode is still empty.
     mode = get_current_mode()
+    keyboard: list[tuple[str, Any]] = []
     if mode or is_zoomed(tab):
-        rows.append((MODE, get_mode_cell(tab)))
-        rows.extend((HINT, text) for text in hint_rows(mode, width))
+        keyboard.append((MODE, get_mode_cell(tab)))
+        keyboard.extend((HINT, text) for text in hint_rows(mode, width))
     elif config.LEADER_HINT:
         # Idle the row says how to reach everything else. It goes in as a plain
         # chip, without the marker that means the keyboard is busy.
-        rows.append((CHIP, get_mode_cell(tab)))
+        keyboard.append((CHIP, get_mode_cell(tab)))
 
-    rows.append((CHIP, footer_cell("attention", config.ATTENTION_ICON, get_agent_attention_text, tab)))
-    rows.append((CHIP, footer_cell("session", config.SESSION_ICON, get_sidebar_session_text, tab)))
+    keyboard.append(
+        (CHIP, footer_cell("attention", config.ATTENTION_ICON, get_agent_attention_text, tab))
+    )
+
+    # Narrowest first, so the session name lands at the bottom of the column as
+    # the thing everything above it qualifies rather than as its heading.
+    where: list[tuple[str, Any]] = [
+        (CHIP, footer_cell("branch", config.BRANCH_ICON, get_session_branch, tab))
+    ]
     if config.SHOW_RIGHT_FOLDER:
-        rows.append((CHIP, footer_cell("folder", config.FOLDER_ICON, get_wd, tab)))
-    rows.append((CHIP, footer_cell("branch", config.BRANCH_ICON, get_session_branch, tab)))
+        where.append((CHIP, footer_cell("folder", config.FOLDER_ICON, get_wd, tab)))
+    where.append(
+        (SESSION, footer_cell("session", config.SESSION_ICON, get_sidebar_session_text, tab))
+    )
+
+    groups = [keyboard, where]
 
     # A cell whose text function has nothing to say (no repo, say) draws
-    # nothing, so drop it instead of leaving a blank row.
-    return [
-        row
-        for row in rows
-        if row[0] == HINT or row[1].length(width, config.VERTICAL_FOOTER_STYLE) > 0
+    # nothing, so drop it instead of leaving a blank row — and drop the whole
+    # group once nothing in it is left, so its gap goes too.
+    kept = [
+        [
+            row
+            for row in group
+            if row[0] == HINT or row[1].length(width, config.VERTICAL_FOOTER_STYLE) > 0
+        ]
+        for group in groups
     ]
+    return [group for group in kept if group]
+
+
+def footer_rows(tab: TabBarData, width: int) -> list[tuple[str, Any]]:
+    """The footer flattened, with blank rows between groups and at the bottom."""
+    gap: list[tuple[str, Any]] = [(GAP, "")] * max(0, config.VERTICAL_FOOTER_SPACING)
+
+    rows: list[tuple[str, Any]] = []
+    for group in footer_groups(tab, width):
+        if rows:
+            rows.extend(gap)
+        for kind, payload in group:
+            rows.append((kind, payload))
+            if kind == SESSION:
+                rows.extend([(SPAN, "")] * (session_size()[0] - 1))
+
+    if rows:
+        rows.extend([(GAP, "")] * max(0, config.VERTICAL_FOOTER_BOTTOM_PAD))
+    return rows
 
 
 def trim_footer(rows: list[tuple[str, Any]], available: int) -> list[tuple[str, Any]]:
@@ -223,6 +303,14 @@ def trim_footer(rows: list[tuple[str, Any]], available: int) -> list[tuple[str, 
     """
     if available <= 0:
         return []
+
+    # Blank rows are the first thing to go, bottom-most first: spacing is worth
+    # having, but never at the price of a row that says something.
+    while len(rows) > available:
+        gaps = [i for i, (kind, _) in enumerate(rows) if kind == GAP]
+        if not gaps:
+            break
+        del rows[gaps[-1]]
 
     dropped = 0
     while len(rows) > available:
@@ -252,21 +340,27 @@ def draw_footer(
 
     start = screen.lines - len(rows)
     for offset, (kind, payload) in enumerate(rows):
+        if kind in (GAP, SPAN):
+            # The tab bar screen is erased before the first tab is drawn, so a
+            # blank row is a row nothing is drawn into.
+            continue
         if kind == HINT:
             draw_dim(screen, start + offset, payload, width, start_column)
         else:
             # The mode is the one row worth a marker: it says the keyboard is
             # doing something other than typing.
             marker = config.VERTICAL_ACTIVE_MARKER if kind == MODE else ""
+            cells, scale = session_size() if kind == SESSION else (1, None)
             draw_footer_cell(
-                screen, start + offset, payload, width, start_column, marker
+                screen, start + offset, payload, width, start_column, marker,
+                cells, scale,
             )
 
 
 def draw_agent_status(
     screen: Screen, tab: TabBarData, row: int, width: int, start: int
 ) -> None:
-    """Draw ``● working · claude`` under an agent's tab.
+    """Draw ``● working · claude`` under an agent's tab, for the chip style.
 
     Nothing is drawn for tabs that aren't running an agent, so the spare row
     kitty hands each tab stays empty for everything else.
@@ -298,6 +392,101 @@ def draw_agent_status(
     screen.cursor.dim = False
 
 
+def tab_dot(tab: TabBarData) -> tuple[str, int]:
+    """The glyph a list row leads with, and its colour.
+
+    An agent's dot takes the colour of its status — the one thing in the
+    sidebar worth catching your eye from across the screen. Everything else
+    gets the app's icon where we know it, and a plain bullet where we don't.
+    """
+    resolved = resolve_agent_status(tab)
+    if resolved is not None:
+        status, _ = resolved
+        dot = config.AGENT_STATUS_DOTS.get(status, config.AGENT_STATUS_DOT)
+        return dot, get_status_color(status)
+
+    colors = get_colors()
+    icon = get_tab_icon(tab)
+    if icon:
+        return icon, colors.accent_chip if tab.is_active else colors.muted_chip
+    return config.VERTICAL_TAB_BULLET, colors.muted_chip
+
+
+def fill_row(screen: Screen, row: int, start: int, width: int, bg: int) -> None:
+    """Paint ``width`` cells of background, so a row reads as one band."""
+    screen.cursor.x = start
+    screen.cursor.y = row
+    reset_attrs(screen)
+    screen.cursor.bg = bg
+    screen.draw(" " * width)
+
+
+def draw_list_tab(
+    screen: Screen,
+    tab: TabBarData,
+    row: int,
+    span: int,
+    width: int,
+    start: int,
+    rows: int,
+) -> None:
+    """A tab as a flat row: dot, title, and a muted line under it.
+
+    The active tab is a filled band across the whole column rather than a
+    pill, which is what stops a stack of tabs reading as a stack of buttons
+    next to a TUI. ``span`` is how far that band reaches and ``width`` how far
+    the text may; they differ only when a rule needs a gutter. kitty fixes how
+    many rows each tab gets, so the second line only exists when it handed out
+    two.
+    """
+    colors = get_colors()
+    band = colors.muted_body if tab.is_active else 0
+    dot, dot_fg = tab_dot(tab)
+
+    # The band is the whole of the active marker here, so no column is spent on
+    # a gutter glyph. The second line sits under the title, not under the dot.
+    gap = " " * config.VERTICAL_TAB_ICON_GAP
+    indent = 1 + len(dot) + len(gap)
+    budget = width - indent
+
+    # The band is the sidebar's full width, not the text's: it starts at column
+    # zero whichever edge the rule is on.
+    if tab.is_active:
+        for offset in range(rows):
+            fill_row(screen, row + offset, 0, span, band)
+
+    screen.cursor.x = start
+    screen.cursor.y = row
+    reset_attrs(screen)
+    screen.cursor.bg = band
+    screen.cursor.fg = dot_fg
+    screen.cursor.bold = True
+    screen.draw(f" {dot}")
+
+    title = get_sidebar_list_text(budget, tab)
+    if title:
+        screen.cursor.fg = colors.accent_fg if tab.is_active else colors.muted_fg
+        screen.cursor.bold = tab.is_active
+        screen.draw(f"{gap}{title}")
+        screen.cursor.bold = False
+
+    if rows < 2:
+        return
+
+    subtitle = get_tab_subtitle(budget, tab)
+    if not subtitle:
+        return
+
+    screen.cursor.x = start + indent
+    screen.cursor.y = row + 1
+    reset_attrs(screen)
+    screen.cursor.bg = band
+    screen.cursor.fg = colors.muted_fg
+    screen.cursor.dim = True
+    draw_scaled(screen, subtitle, config.VERTICAL_SECONDARY_TEXT_SCALE)
+    screen.cursor.dim = False
+
+
 def draw_active_marker(screen: Screen, tab: TabBarData, marker: str) -> None:
     reset_attrs(screen)
     if tab.is_active:
@@ -322,35 +511,53 @@ def draw_vertical_tab(
     separator = config.VERTICAL_SEPARATOR
     on_right = draw_data.tab_bar_edge == "right"
 
-    # The rule lives on the inner edge — on the left it takes the column kitty
-    # already keeps out of max_tab_length — plus a column of gutter so chips
-    # don't butt up against it.
-    reserved = len(separator) + 1 if separator else 0
-    width = max(1, min(max_length, screen.columns - reserved))
-    content_column = reserved if separator and on_right else 0
+    # Two widths, because a band is background rather than text. kitty hands
+    # out a text budget of columns - 1, and drawing the band inside it left it
+    # short of the edge by that spare column, the rule's column, and the gutter
+    # keeping text off the rule. The band takes all three: it runs the full
+    # width and the rule is repainted on top of it. Stopping the band beside
+    # the rule is not enough — a rule is a glyph with its own padding inside
+    # its cell, so half a cell of gap survives and still reads as falling short.
+    rule = len(separator)
+    rule_column = 0 if on_right else screen.columns - rule
+    span = screen.columns
+    # Text runs right up to the rule with no gutter: the column buys a title
+    # one more character before it has to elide, which is worth more than the
+    # breathing room, and the rule is drawn thin enough not to crowd it.
+    width = max(1, min(max_length, screen.columns - rule))
+    content_column = rule if separator and on_right else 0
     if separator and index == 1:
-        draw_separator(screen, 0 if on_right else screen.columns - len(separator))
+        draw_rule(screen, rule_column, range(screen.lines))
 
-    body_width = max(1, width - len(marker))
-    screen.cursor.x = content_column
-    screen.cursor.y = row
+    # kitty gives each tab two rows whenever there are few enough of them.
+    rows = row_pitch if row + row_pitch <= screen.lines else 1
 
-    if marker and not on_right:
-        draw_active_marker(screen, tab, marker)
+    if config.VERTICAL_TAB_STYLE == "list":
+        draw_list_tab(screen, tab, row, span, width, content_column, rows)
+        if separator and tab.is_active:
+            draw_rule(
+                screen, rule_column, range(row, row + rows), get_colors().muted_body
+            )
+    else:
+        body_width = max(1, width - len(marker))
+        screen.cursor.x = content_column
+        screen.cursor.y = row
 
-    cell = get_tab_cell(tab, session_index, get_sidebar_tab_text)
-    chip_length = cell.length(body_width)
-    reset_attrs(screen)
-    cell.draw(screen, body_width)
+        if marker and not on_right:
+            draw_active_marker(screen, tab, marker)
 
-    if marker and on_right:
-        screen.draw(" " * max(0, width - len(marker) - chip_length))
-        draw_active_marker(screen, tab, marker)
+        cell = get_tab_cell(tab, session_index, get_sidebar_tab_text)
+        chip_length = cell.length(body_width)
+        reset_attrs(screen)
+        cell.draw(screen, body_width)
 
-    # kitty gives each tab two rows whenever there are few enough of them; the
-    # second one carries the agent status.
-    if config.VERTICAL_SHOW_AGENT_STATUS and row_pitch > 1 and row + 1 < screen.lines:
-        draw_agent_status(screen, tab, row + 1, width, content_column)
+        if marker and on_right:
+            screen.draw(" " * max(0, width - len(marker) - chip_length))
+            draw_active_marker(screen, tab, marker)
+
+        # The spare row carries the agent status.
+        if config.VERTICAL_SHOW_AGENT_STATUS and rows > 1:
+            draw_agent_status(screen, tab, row + 1, width, content_column)
 
     # The footer belongs to the active tab, so draw it from that tab's call —
     # but only into rows no tab can claim, since later tabs draw over it.

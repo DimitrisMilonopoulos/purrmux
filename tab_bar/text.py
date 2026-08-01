@@ -10,6 +10,7 @@ from . import config
 from .attention import get_agent_status, tab_has_agent_attention
 from .git import get_git_branch, shorten_branch
 from .modes import get_current_mode, get_mode_name
+from .session import get_session_root
 
 
 def get_wd(max_size: int, tab: TabBarData) -> str | None:
@@ -46,11 +47,24 @@ def get_wd(max_size: int, tab: TabBarData) -> str | None:
 
 
 def get_session_branch(max_size: int, tab: TabBarData) -> str | None:
-    accessor = TabAccessor(tab.tab_id)
-    if not accessor.active_wd:
-        return None
+    """The branch of the session's own directory, not of the focused window.
 
-    branch = get_git_branch(Path(accessor.active_wd))
+    A session is a project, and its branch belongs at the bottom of the sidebar
+    once rather than under every tab. Reading it from the active window's cwd
+    made it follow you around — cd into another repo and the footer reported
+    that repo's branch for the session.
+    """
+    root = get_session_root(tab.session_name)
+
+    if root is None:
+        # No session file: the startup session, or one opened by hand. The
+        # focused window's cwd is the only directory on offer.
+        accessor = TabAccessor(tab.tab_id)
+        if not accessor.active_wd:
+            return None
+        root = Path(accessor.active_wd)
+
+    branch = get_git_branch(root)
     if branch is None:
         return None
 
@@ -117,15 +131,23 @@ def get_mode_text(max_size: int, tab: TabBarData) -> str | None:
         return None
 
 
-def get_tab_title(tab: TabBarData) -> str:
-    accessor = TabAccessor(tab.tab_id)
-
+def get_tab_name(tab: TabBarData) -> str:
+    """What the tab is called, with nothing prepended to it."""
     if tab.title:
-        text = tab.title.removeprefix("#")
-    else:
-        text = str(accessor.active_exe)
+        return tab.title.removeprefix("#")
+    return str(TabAccessor(tab.tab_id).active_exe)
 
-    icon = get_app_icon(accessor) if config.ENABLE_APP_ICONS else None
+
+def get_tab_icon(tab: TabBarData) -> str | None:
+    if not config.ENABLE_APP_ICONS:
+        return None
+    return get_app_icon(TabAccessor(tab.tab_id))
+
+
+def get_tab_title(tab: TabBarData) -> str:
+    text = get_tab_name(tab)
+
+    icon = get_tab_icon(tab)
     if icon:
         text = f"{icon} {text}"
 
@@ -197,6 +219,50 @@ def get_sidebar_tab_text(max_size: int, tab: TabBarData) -> str | None:
         text = text[: max_size - 1] + "…"
 
     return text
+
+
+def get_sidebar_list_text(max_size: int, tab: TabBarData) -> str | None:
+    """Tab title for the sidebar's list style.
+
+    The icon and the attention marker that get_tab_title prepends are left off:
+    in a list the row already leads with a coloured dot carrying both.
+    """
+    text = get_tab_name(tab)
+
+    if max_size < 1:
+        return ""
+    if len(text) > max_size:
+        text = text[: max_size - 1] + "…"
+
+    return text
+
+
+def get_tab_subtitle(max_size: int, tab: TabBarData) -> str | None:
+    """The muted line under a tab: what its agent is doing.
+
+    A branch belongs to the session, not to a tab, so it is drawn once at the
+    bottom of the sidebar instead of repeated under every tab of the same repo
+    — where it was also wrong, being read from each tab's own cwd.
+    """
+    if max_size < 1:
+        return None
+
+    if config.VERTICAL_SHOW_AGENT_STATUS:
+        resolved = resolve_agent_status(tab)
+        if resolved is not None:
+            status, agent = resolved
+            label = f"{status} · {agent}" if agent else status
+            if len(label) <= max_size:
+                return label
+            # Which agent matters less than what it is doing.
+            if len(status) <= max_size:
+                return status
+            return f"{status[: max_size - 1]}…" if max_size >= 2 else None
+
+    if config.VERTICAL_SHOW_TAB_BRANCH:
+        return get_session_branch(max_size, tab)
+
+    return None
 
 
 def get_session_text(max_size: int, tab: TabBarData) -> str | None:

@@ -177,9 +177,17 @@ There is no remote-control command for setting an option, so the script reloads 
 
 The custom tab bar draws a different layout in sidebar mode (`tab_bar/vertical.py`):
 
-- **Tabs** as one chip per row from the top, with an active-tab marker at the outer edge, and a full-height rule dividing the sidebar from the panes — kitty has no option for a tab bar border, so the tab bar paints that column itself.
-- **Agent status** on the spare row kitty gives each tab (`● working · claude`), for tabs running an agent only.
+- **Tabs** as one flat row each from the top — a coloured dot, the title, and a muted second line — with a full-height rule dividing the sidebar from the panes, since kitty has no option for a tab bar border. The active tab is a filled band running edge to edge rather than a pill, which is what keeps a column of tabs from reading as a stack of buttons next to a TUI. The band is the only active marker: no gutter glyph, so nothing indents the titles. It covers the rule's own column and the rule is repainted on top of it — stopping the band beside the rule leaves half a cell of gap, since a rule is a glyph with padding inside its cell, and that gap reads as the band falling short. `VERTICAL_TAB_STYLE = "chip"` brings back the powerline pills the horizontal bar uses, `VERTICAL_ACTIVE_MARKER` and all.
+- **A second line** under each tab, on the spare row kitty hands out whenever there are at most `lines / 2` tabs: what the agent is doing (`working · claude`). The dot carries the agent's status colour, so a blocked agent is visible from across the screen without reading a word. Tabs with no agent leave the row empty, which is the space between one tab and the next.
+
+The dot is the app's icon where the tab is running something we have an icon for, an agent's status dot where it's running an agent, and a folder for a shell — whose title is a path anyway. `VERTICAL_TAB_BULLET` covers everything else.
 - **A footer** carrying what the horizontal bar keeps in its side sections — agent attention, session, git branch, plus the keyboard mode (including zoom) and its hints. Drawn flat rather than as powerline chips, since stacked caps read as chunky pills in a narrow column, with each row's icon coloured from the theme palette. It's dropped entirely when the tabs need the rows.
+
+There are no section headers between groups of tabs. kitty places each tab at `start_row + i * tab_line_height` and builds the click map from those same rows, so a header row drawn between two tabs would shift every tab below it out of its own hit box and clicking the sidebar would focus the wrong tab.
+
+The branch is the *session's*, read from the directory its session file `cd`s to (`~/.local/share/kitty-sessions/<name>.kitty-session`, cached on that file's mtime) rather than from whatever window is focused. A branch belongs to the project, so it should not change when you cd, and a session whose tabs sit in two different repos should not report whichever one you last looked at. Sessions with no file — the startup session, or one opened by hand — fall back to the focused window's cwd, which is all there is.
+
+Those rows are in two groups, split by what they answer: what is happening now — the keyboard mode with its hints, and any agent waiting on you — then where you are, the branch with the session under it. One blank row between them, none inside, so the block reads as two things rather than one wall of text. The session name sits at the bottom, flush against the last line, and is marked as the anchor by weight — bold at full brightness — rather than by size. `VERTICAL_SESSION_SCALE` will scale it, but there is no gentle setting: kitty's text sizing protocol can shrink a glyph inside its cell and never grow it past one, so anything above 1 claims a second cell in both directions, and only whole multiples fill what they claim. 1.5× reads as letter-spaced with an empty sliver under it; 2× is tight but twice the size. Where it is used, the extra row is reserved rather than left spare, so nothing trims it out from under the name. A group whose rows all have nothing to say disappears with its blank row, and when the sidebar runs short the blank rows are the first thing shed, bottom-most first, so spacing never costs a hint. `VERTICAL_FOOTER_SPACING` sets the gap; `VERTICAL_FOOTER_BOTTOM_PAD` is `0` so the session name ends the column flush against the last line.
 
 ### The keyboard mode row
 
@@ -190,17 +198,17 @@ So the mode row does both jobs. Idle it shows `LEADER_HINT` (`^g`) rather than t
 `MODE_HINT_STYLE` picks how those keys are drawn, from one grouped table in `tab_bar/config.py`:
 
 ```
-"keys" (default)          "labels"
- modes  p t s o a l        p pane        t tab
- tools  g d b /            s scroll      o session
-                           a appearance  l lock
-                           g git         d docker
-                           b btop        / help
+"labels" (default)        "keys"
+ p pane        t tab       modes  p t s o a l
+ s scroll      o session    tools  g d b /
+ a appearance  l lock
+ g git         d docker
+ b btop        / help
 ```
 
-`"keys"` fits the leader in two rows and reads as a reminder; `"labels"` spends five and teaches instead, falling back to one per row when the sidebar is too narrow to split. When rows run short the hints are shed from the end, and the last one becomes `…+3 more` rather than disappearing quietly.
+`"labels"` spends five rows on the leader and teaches, falling back to one pair per row when the sidebar is too narrow to split; `"keys"` fits it in two and reads as a reminder once the letters are familiar. When rows run short the hints are shed from the end, and the last one becomes `…+3 more` rather than disappearing quietly.
 
-Knobs at the top of `tab_bar/config.py`: `MODE_HINT_STYLE`, `LEADER_HINT`, `SHOW_LEADER_HINTS` (list the leader's keys while idle — horizontal bar only), `VERTICAL_ACTIVE_MARKER`, `VERTICAL_SEPARATOR`, `VERTICAL_SHOW_STATUS` (off hides the whole footer, leader row included), `VERTICAL_SHOW_AGENT_STATUS`, `VERTICAL_FOOTER_STYLE`, `VERTICAL_FOOTER_ICON_COLORS`, and `VERTICAL_SECONDARY_TEXT_SCALE` (font size of the status and hint rows, via kitty's text sizing protocol — chips can't scale, their borders are glyphs). Sidebar side and width live in `tab_bar/toggle-edge.py` (`SIDEBAR_EDGE`, `SIDEBAR_CELLS`).
+Knobs at the top of `tab_bar/config.py`: `MODE_HINT_STYLE`, `LEADER_HINT`, `SHOW_LEADER_HINTS` (list the leader's keys while idle — horizontal bar only), `VERTICAL_TAB_STYLE`, `VERTICAL_TAB_BULLET`, `VERTICAL_ACTIVE_MARKER`, `VERTICAL_SEPARATOR`, `VERTICAL_SHOW_STATUS` (off hides the whole footer, leader row included), `VERTICAL_SHOW_AGENT_STATUS`, `VERTICAL_SHOW_TAB_BRANCH`, `VERTICAL_FOOTER_STYLE`, `VERTICAL_FOOTER_ICON_COLORS`, `VERTICAL_FOOTER_SPACING`, `VERTICAL_FOOTER_BOTTOM_PAD`, `VERTICAL_SESSION_SCALE`, and `VERTICAL_SECONDARY_TEXT_SCALE` (font size of the status and hint rows, via kitty's text sizing protocol — chips can't scale, their borders are glyphs). Sidebar side and width live in `tab_bar/toggle-edge.py` (`SIDEBAR_EDGE`, `SIDEBAR_CELLS`).
 
 To start with the horizontal bar instead, put `tab_bar_edge bottom`, `tab_bar_align center` and `tab_title_max_length 0` in `override.conf` — the same values the toggle sends. That's also the fix on kitty older than 0.48, where `left` is not a valid edge.
 

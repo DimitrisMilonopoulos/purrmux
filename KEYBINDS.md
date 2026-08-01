@@ -15,8 +15,9 @@ exits a mode**, so `esc`, `enter` and a mistyped key all cancel. Modes wait
 indefinitely — set `map_timeout 2.0` in `override.conf` if you would rather they
 expire on idle.
 
-Hints are grouped by default (`modes  p t s o a l`). For a key-by-key list with
-labels instead, set `MODE_HINT_STYLE = "labels"` in `tab_bar/config.py`.
+Each key gets its own label by default (`p pane   t tab`), two to a row. For a
+compact list of just the keys, grouped (`modes  p t s o a l`), set
+`MODE_HINT_STYLE = "keys"` in `tab_bar/config.py`.
 
 Launch kitty with `--single-instance` — session cycling and the agent
 picker/overview only see sessions in their own kitty process.

@@ -13,17 +13,39 @@ TAB_BAR_TEXT_SCALE: tuple[int, int] | None = None
 
 # Sidebar mode (tab_bar_edge left/right, kitty >= 0.48). Toggle it at runtime
 # with tab_bar/toggle-edge.py; these only affect how the sidebar is drawn.
-# VERTICAL_ACTIVE_MARKER: column drawn at the outer edge of the active tab's
-# row ("" disables it). VERTICAL_SEPARATOR: full-height rule down the inner
-# edge, dividing the sidebar from the panes ("" disables it, giving the column
-# back to the tab titles). VERTICAL_SHOW_STATUS: the branch of the active tab —
+# VERTICAL_ACTIVE_MARKER: column drawn at the outer edge of the active row
+# ("" disables it) — the "chip" tab style and the footer's mode row only, since
+# the "list" style marks the active tab by filling its band instead.
+# VERTICAL_SEPARATOR: full-height rule down the inner edge, dividing the
+# sidebar from the panes ("" disables it, and the tabs take the two columns it
+# was holding — the rule itself and the gutter keeping text off it).
+# VERTICAL_SHOW_STATUS: the branch of the active tab —
 # plus the keyboard mode and its hints — stacked at the bottom of the sidebar.
 # VERTICAL_SHOW_AGENT_STATUS: agent status ("working · claude") on the spare row
-# under each agent tab, when kitty gives tabs two rows each.
+# under each tab, when kitty gives tabs two rows each.
+# VERTICAL_SHOW_TAB_BRANCH: fall back to the tab's git branch on that row when
+# it isn't running an agent. Off, because the branch belongs to the session and
+# the footer already carries it — and read per tab it is read from that tab's
+# cwd, so tabs in one project could disagree about its branch.
 VERTICAL_ACTIVE_MARKER = "▎"
 VERTICAL_SEPARATOR = "│"
 VERTICAL_SHOW_STATUS = True
 VERTICAL_SHOW_AGENT_STATUS = True
+VERTICAL_SHOW_TAB_BRANCH = False
+
+# How a tab is drawn in the sidebar.
+#   "list"  flat rows: a coloured dot, the title, and a muted second row. The
+#           active tab is a filled band rather than a pill. Reads as a list of
+#           things rather than a stack of buttons, which is what a column of
+#           tabs next to a TUI wants to be.
+#   "chip"  the powerline pills the horizontal bar uses.
+# The dot is the app's icon where one is known, and an agent's status dot —
+# coloured by status — where the tab is running one.
+VERTICAL_TAB_STYLE = "list"
+VERTICAL_TAB_BULLET = "•"
+# Columns between that dot and the title. The second line indents to match, so
+# it stays under the title rather than under the dot.
+VERTICAL_TAB_ICON_GAP = 2
 
 # Agents report a status into the agent_status user var from the attention hooks
 # (hooks/install-attention-hooks.sh). AGENT_EXES are the processes recognised as
@@ -32,6 +54,29 @@ VERTICAL_SHOW_AGENT_STATUS = True
 # and plain text — because powerline caps read as chunky pills once they are
 # stacked in a narrow column; "chip" matches the tab pills instead.
 VERTICAL_FOOTER_STYLE = "minimal"
+
+# Blank rows inside the footer, which otherwise stacks four unrelated things
+# into a solid block. VERTICAL_FOOTER_SPACING separates the groups — keyboard
+# mode (with its hints), attention, then branch and session — and
+# VERTICAL_FOOTER_BOTTOM_PAD holds the last row off the bottom edge. That one is
+# 0 so the session name ends the column flush against it. Both are the first
+# thing given up when the sidebar runs short of rows, so spacing never costs
+# you a hint.
+VERTICAL_FOOTER_SPACING = 1
+VERTICAL_FOOTER_BOTTOM_PAD = 0
+
+# Size of the session name — the last row of the footer, and the thing the rest
+# of the footer qualifies — as a (numerator, denominator) fraction of every
+# other row. kitty's text sizing protocol grows text only by handing it whole
+# extra cells and shrinks it by a fraction within them, so 3/2 is two cells with
+# the glyph drawn at three quarters of them. Anything above 1 therefore costs a
+# second row and two columns per character however gentle the fraction, and only
+# whole multiples fill their cells: (3, 2) reads as letter-spaced and leaves a
+# sliver of empty box under the name, (2, 1) is double and tight.
+#
+# So this stays 1: the row is marked as the anchor by weight instead, drawn bold
+# and at full brightness like the attention row (see footer_cell).
+VERTICAL_SESSION_SCALE = (1, 1)
 
 # Icon colour per footer row, named after a kitty palette option so it follows
 # whatever theme is loaded. The icons carry the colour and the text stays muted,
@@ -65,7 +110,7 @@ SHOW_RIGHT_FOLDER = False
 #            rows; reads as a reminder once the letters are familiar.
 #   "labels" every key with its own label, two to a row — `p pane   t tab`.
 #            Roughly twice the rows, but it teaches rather than reminds.
-MODE_HINT_STYLE = "keys"
+MODE_HINT_STYLE = "labels"
 
 # Drawn in the mode row when no keyboard mode is active, so the sidebar always
 # says how to reach everything else. "" leaves the row out at idle. The row
@@ -90,6 +135,11 @@ APP_ICONS: dict[str, str] = {
     "nvim": "",
     "lazygit": "",
     "lazydocker": "",
+    # A shell has no app to name, and its title is a path: say so with a folder.
+    "fish": "",
+    "zsh": "",
+    "bash": "",
+    "sh": "",
 }
 
 FOLDER_ICON = " "
@@ -97,7 +147,12 @@ BRANCH_ICON = " "
 MODE_ICON = "󰘳 "
 ZOOM_ICON = " "
 SESSION_ICON = " "
-ATTENTION_ICON = "! "
+# Two glyphs, in color1 from VERTICAL_FOOTER_ICON_COLORS: nf-md-robot says what
+# wants you, and the "!" that it is waiting. They need the space between them — this
+# is a Nerd Font rather than a Nerd Font Mono, so its icons are drawn two cells
+# wide, and kitty shrinks one to a single cell rather than let it run into a
+# neighbour that isn't blank.
+ATTENTION_ICON = "\U000f06a9 ! "
 
 # Mode names come from keybinds.conf (`--new-mode <name>`); the labels are what
 # the tab bar shows. "zoom" is synthetic — see modes.py.

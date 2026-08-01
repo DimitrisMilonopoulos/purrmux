@@ -10,7 +10,10 @@ from .text import get_mode_text, get_static_text, get_tab_text
 
 
 def draw_scaled(
-    screen: Screen, text: str, scale: tuple[int, int] | None = None
+    screen: Screen,
+    text: str,
+    scale: tuple[int, int] | None = None,
+    cells: int = 1,
 ) -> None:
     """Draw ``text`` at ``scale``, defaulting to ``config.TAB_BAR_TEXT_SCALE``.
 
@@ -18,18 +21,23 @@ def draw_scaled(
     the normal size using kitty's text sizing protocol (OSC 66). The escape is
     pushed through the screen's parser because ``screen.draw`` writes literal
     characters; the cursor's current fg/bold carry over since sizing is
-    orthogonal to SGR. Cell widths stay 1-per-char, so callers need no width
-    accounting changes. Falls back to a plain draw when scaling is off, the
+    orthogonal to SGR. Falls back to a plain draw when scaling is off, the
     text is empty, or it carries an escape that would corrupt the sequence.
+
+    ``cells`` is the only way to draw text *bigger* than everything else: the
+    fraction can shrink a glyph inside its cell but not grow it past one, so
+    the protocol grows text by giving it more cells. ``cells=2`` is twice the
+    size and costs two rows and two columns per glyph, which callers have to
+    budget for — everything else here stays 1 column per character.
     """
     if scale is None:
         scale = config.TAB_BAR_TEXT_SCALE
-    if not text or scale is None or "\x1b" in text:
+    if not text or "\x1b" in text or (scale is None and cells == 1):
         screen.draw(text)
         return
 
-    n, d = scale
-    payload = f"\x1b]66;s=1:n={n}:d={d};{text}\x1b\\".encode("utf-8")
+    fraction = f":n={scale[0]}:d={scale[1]}" if scale else ""
+    payload = f"\x1b]66;s={cells}{fraction};{text}\x1b\\".encode("utf-8")
     buf = screen.test_create_write_buffer()
     screen.test_commit_write_buffer(payload, buf)
     screen.test_parse_written_data()
@@ -80,19 +88,37 @@ class Cell:
         self.minimal_icon: str = self.icon.rstrip()
         self.minimal_overhead: int = len(self.minimal_icon) + 3
 
-    def draw(self, screen: Screen, max_size: int, style: str | None = None) -> None:
+    def draw(
+        self,
+        screen: Screen,
+        max_size: int,
+        style: str | None = None,
+        cells: int = 1,
+        scale: tuple[int, int] | None = None,
+    ) -> None:
         """Draw the cell in ``style``, defaulting to ``config.TAB_BAR_STYLE``.
 
         The style is a parameter so one part of the bar can differ from the
         rest: the sidebar draws its footer flat while the tabs stay chips.
+        ``cells`` scales the row up (see draw_scaled) and only the flat style
+        honours it — a powerline chip's borders are glyphs, and doubling them
+        doubles the border too.
         """
         if (style or config.TAB_BAR_STYLE) == "minimal":
-            self._draw_minimal(screen, max_size)
+            self._draw_minimal(screen, max_size, cells, scale)
         else:
             self._draw_chip(screen, max_size)
 
-    def _draw_minimal(self, screen: Screen, max_size: int) -> None:
-        text = self.text_fn(max_size - self.minimal_overhead, self.tab)
+    def _draw_minimal(
+        self,
+        screen: Screen,
+        max_size: int,
+        cells: int = 1,
+        scale: tuple[int, int] | None = None,
+    ) -> None:
+        # Every glyph costs `cells` columns when the row is scaled up, so the
+        # text has that fraction of the row to fit in.
+        text = self.text_fn(max_size // cells - self.minimal_overhead, self.tab)
 
         if text is None:
             return
@@ -110,14 +136,14 @@ class Cell:
         else:
             screen.cursor.fg = self.color if self.accent else self.fg
         screen.cursor.bold = True
-        draw_scaled(screen, self.minimal_icon)
+        draw_scaled(screen, self.minimal_icon, scale, cells)
         screen.cursor.bold = False
 
         if text != "":
             screen.cursor.fg = self.fg
             screen.cursor.bold = self.accent
             screen.draw(" ")
-            draw_scaled(screen, text)
+            draw_scaled(screen, text, scale, cells)
             screen.cursor.bold = False
 
         screen.draw(" ")
