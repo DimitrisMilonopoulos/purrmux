@@ -1,7 +1,3 @@
-import re
-from pathlib import Path
-
-
 # "chip"    -> powerline chips with filled icon blocks and bodies (default)
 # "minimal" -> flat text + colored icons, sections divided by MINIMAL_SEPARATOR
 TAB_BAR_STYLE = "chip"
@@ -63,7 +59,23 @@ VERTICAL_SECONDARY_TEXT_SCALE: tuple[int, int] | None = (9, 10)
 ENABLE_APP_ICONS = True
 SHOW_AGENT_ATTENTION = True
 SHOW_RIGHT_FOLDER = False
-SHOW_SEQUENCE_HINTS = False
+
+# How a mode's keys are drawn under its name in the footer. See MODE_HINTS.
+#   "keys"   grouped, keys only — `modes  p t s o a l`. The leader fits in two
+#            rows; reads as a reminder once the letters are familiar.
+#   "labels" every key with its own label, two to a row — `p pane   t tab`.
+#            Roughly twice the rows, but it teaches rather than reminds.
+MODE_HINT_STYLE = "keys"
+
+# Drawn in the mode row when no keyboard mode is active, so the sidebar always
+# says how to reach everything else. "" leaves the row out at idle. The row
+# belongs to the footer, so VERTICAL_SHOW_STATUS = False hides it too.
+LEADER_HINT = "^g"
+
+# Also list what the leader offers while idle, in the horizontal bar's left
+# section. The sidebar has no room for it — it shows LEADER_HINT instead, and
+# the full list once you press the leader.
+SHOW_LEADER_HINTS = False
 
 REFRESH_TIME = 15
 MAX_LENGTH_PATH = 3
@@ -71,78 +83,6 @@ MAX_LENGTH_BRANCH = 35
 MAX_LENGTH_TITLE_ACTIVE = 30
 MAX_LENGTH_TITLE_INACTIVE = 15
 
-
-_KEYBINDS_CONF_PATH = Path(__file__).resolve().parent.parent / "keybinds.conf"
-_ACTION_LABEL_ALIASES = {
-    "kitty-zoxide-sessions": "sessions",
-    "attention-picker": "attention",
-    "lazygit": "git",
-    "lazydocker": "docker",
-}
-
-
-def _normalize_action_token(token: str) -> str:
-    stripped = token.strip().strip("\"'")
-    stem = Path(stripped).name.removesuffix(".py")
-
-    if stem in _ACTION_LABEL_ALIASES:
-        return _ACTION_LABEL_ALIASES[stem]
-
-    stem = stem.removeprefix("kitty-")
-    stem = stem.removeprefix("focus-or-launch-tool-")
-    return stem.replace("-", " ").replace("_", " ").strip() or "action"
-
-
-def _label_from_action(action: str) -> str:
-    skipped_tokens = {
-        "launch",
-        "combine",
-        "sh",
-        "-c",
-        "python",
-        "python3",
-        "current",
-    }
-
-    for token in reversed(action.replace(":", " ").split()):
-        if token.startswith("--") or token in skipped_tokens:
-            continue
-        return _normalize_action_token(token)
-
-    return "action"
-
-
-def _load_sequence_hints() -> list[tuple[str, str]]:
-    if not _KEYBINDS_CONF_PATH.exists():
-        return []
-
-    pattern = re.compile(r"^\s*map\s+ctrl\+a>(\S+)\s+(.+?)\s*$")
-    hints: list[tuple[str, str]] = []
-
-    for line in _KEYBINDS_CONF_PATH.read_text(encoding="utf-8").splitlines():
-        stripped = line.strip()
-        if not stripped or stripped.startswith("#"):
-            continue
-
-        match = pattern.match(line)
-        if not match:
-            continue
-
-        key, action = match.groups()
-        hints.append((f"^a {key} ", _label_from_action(action)))
-
-    return hints
-
-
-DEFAULT_SEQUENCE_HINTS = [
-    ("^a k ", "sessions"),
-    ("^a a ", "attention"),
-    ("^a b ", "btop"),
-    ("^a g ", "git"),
-    ("^a d ", "docker"),
-]
-
-SEQUENCE_HINTS = _load_sequence_hints() or DEFAULT_SEQUENCE_HINTS
 
 APP_ICONS: dict[str, str] = {
     "claude": "\U000f06a9",
@@ -159,50 +99,69 @@ ZOOM_ICON = " "
 SESSION_ICON = " "
 ATTENTION_ICON = "! "
 
+# Mode names come from keybinds.conf (`--new-mode <name>`); the labels are what
+# the tab bar shows. "zoom" is synthetic — see modes.py.
 MODE_LABELS = {
     "": "normal",
-    "__sequence__": "leader",
+    "leader": "leader",
     "pane": "pane",
     "tabmode": "tab",
     "scrollmode": "scroll",
-    "opacitymode": "opacity",
+    "sessionmode": "session",
+    "appearancemode": "appearance",
     "locked": "locked",
     "zoom": "zoom",
 }
 
-MODE_HINTS = {
+# What each mode offers, grouped, shown under the mode name. These duplicate
+# keybinds.conf by hand because the grouping is a judgement call a parser would
+# make badly — "hjkl focus" reads better than four separate entries — so the
+# two files have to be updated together. tab_bar/check-hints.py fails if a hint
+# names a key the conf does not bind.
+#
+# One structure feeds both hint styles: MODE_HINT_STYLE "keys" draws the group
+# name and its keys, "labels" ignores the grouping and draws every pair.
+MODE_HINTS: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
+    "leader": [
+        ("modes", [
+            ("p", "pane"),
+            ("t", "tab"),
+            ("s", "scroll"),
+            ("o", "session"),
+            ("a", "appearance"),
+            ("l", "lock"),
+        ]),
+        ("tools", [("g", "git"), ("d", "docker"), ("b", "btop"), ("/", "help")]),
+    ],
     "pane": [
-        ("hjkl ", "focus"),
-        ("HJKL ", "move"),
-        ("v ", "vsplit"),
-        ("s ", "split"),
-        ("g ", "git"),
-        ("d ", "docker"),
-        ("x ", "close"),
-        ("-= ", "height"),
-        (",. ", "width"),
+        ("move", [("hjkl", "focus"), ("HJKL", "move")]),
+        ("size", [("-=", "height"), (",.", "width")]),
+        ("split", [("v", "vsplit"), ("s", "split")]),
+        ("pane", [("w", "picker"), ("f", "zoom"), ("x", "close")]),
     ],
     "tabmode": [
-        ("n ", "new"),
-        ("x ", "close"),
-        ("w ", "picker"),
-        ("hl ", "switch"),
-        ("r ", "rename"),
-        ("v ", "sidebar"),
-        ("1-9 ", "goto"),
+        ("tab", [("n", "new"), ("x", "close"), ("r", "rename")]),
+        ("go", [("hl", "switch"), ("1-9", "goto")]),
     ],
     "scrollmode": [
-        ("jk ", "line"),
-        ("du ", "page"),
-        ("gG ", "ends"),
+        ("scroll", [("jk", "line"), ("du", "page"), ("gG", "ends")]),
     ],
-    "opacitymode": [
-        ("-= ", "opacity"),
-        ("0 ", "reset"),
+    "sessionmode": [
+        ("open", [("k", "sessions"), ("a", "agents"), ("o", "overview")]),
+        ("cycle", [("[]", "prev/next")]),
+    ],
+    "appearancemode": [
+        ("opacity", [("-=", "adjust"), ("0", "reset")]),
+        ("bar", [("v", "sidebar")]),
     ],
     "locked": [
-        ("^g ", "unlock"),
-        ("* ", "app keys"),
+        ("unlock", [("^g", "exit")]),
+        ("apps", [("*", "app keys")]),
     ],
-    "__sequence__": SEQUENCE_HINTS,
 }
+
+
+def iter_hints(mode: str):
+    """Every (keys, label) pair for a mode, flattened out of its groups."""
+    for group in MODE_HINTS.get(mode, []):
+        yield from group[1]

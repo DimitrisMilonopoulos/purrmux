@@ -1,33 +1,64 @@
 # purrmux
 
-A tmux-ish kitty config — modal pane/tab/scroll/lock navigation, zoxide-backed session management, fzf pane picker, lazygit/lazydocker tool tabs, and a custom tab bar.
+A tmux-ish kitty config — a `ctrl+g` leader driving modal pane/tab/scroll/session navigation, zoxide-backed session management, fzf pane and agent pickers, lazygit/lazydocker overlays, and a custom tab bar that doubles as the mode cheatsheet.
 
-See [`KEYBINDS.md`](KEYBINDS.md) for the full cheatsheet. While running, `ctrl+shift+/` opens it in a tab (`q` to dismiss).
+![purrmux in action — vertical tab bar with agent statuses and the session/branch footer](assets/2026-07-31-14-33-11.png)
+
+## At a glance
+
+| Tier | Keys | What lives there |
+| --- | --- | --- |
+| **Leader** | `ctrl+g` | Everything infrequent — modes (`p` pane, `t` tab, `s` scroll, `o` session, `a` appearance, `l` lock) and tools (`g` lazygit, `d` lazydocker, `b` btop, `/` help) |
+| **Quick** | `alt+h/j/k/l`, `alt+[`, `alt+]` | The hot path — pane focus and session cycling |
+| **kitty** | `ctrl+shift+…` | New tab and window, tab switching |
+
+Three tiers, arranged so kitty takes as little as possible from the programs running inside it: one key from your shell and editor, plus six on the hot path. Full cheatsheet in [`KEYBINDS.md`](KEYBINDS.md), or press `ctrl+g` `/` while running.
+
+## Contents
+
+- [What changed](#what-changed)
+- [Prerequisites](#prerequisites)
+- [Install](#install)
+- [Launch it with `--single-instance`](#launch-it-with---single-instance)
+- [Platform support](#platform-support)
+- [Customizing without forking](#customizing-without-forking)
+- [Vertical tab bar (sidebar)](#vertical-tab-bar-sidebar)
+- [Agent attention hooks](#agent-attention-hooks)
+- [Security note](#security-note)
+
+## What changed
+
+The keybinds were restructured in full. A single `ctrl+g` leader replaces the old `alt+p` / `alt+t` / `alt+s` / `alt+o` / `alt+g` mode keys and the `ctrl+a>…` chords, so kitty takes one key from the programs inside it rather than eleven — and `ctrl+a` goes back to being beginning-of-line. `alt+h/j/k/l` and `alt+[` / `alt+]` are unchanged.
+
+One behaviour change is worth calling out, because it is a fix rather than a rename: in pane mode `h/j/k/l` now focus and `H/J/K/L` now move. They used to collide. kitty parses a bare `H` identically to `h`, and the later binding wins, so pane mode had been moving panes on `h` with focus unreachable. `g`/`G` in scroll mode had the same problem.
 
 ## Prerequisites
 
 **Required**
 
-- [kitty](https://sw.kovidgoyal.net/kitty/) 0.48+ — the vertical tab bar (`tab_bar_edge left`) is the default here; on older versions see the `override.conf` note under [Vertical tab bar](#vertical-tab-bar-sidebar), which also needs `globinclude` and the `KITTY_OS` variable
-- Python 3 — ships with both distros; used by the tab bar and session/tab/tool scripts
-- [fish](https://fishshell.com/) — set as `shell` in `kitty.conf`; change the line (or use `override.conf` below) if you use zsh/bash
-- [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) — for the tab-bar icons and powerline glyphs
+| Tool | Why |
+| --- | --- |
+| [kitty](https://sw.kovidgoyal.net/kitty/) 0.48+ | The vertical tab bar (`tab_bar_edge left`) is the default here; on older versions see the `override.conf` note under [Vertical tab bar](#vertical-tab-bar-sidebar), which also needs `globinclude` and the `KITTY_OS` variable |
+| Python 3 | Ships with both distros; used by the tab bar and the session, tab and tool scripts |
+| [fish](https://fishshell.com/) | Set as `shell` in `kitty.conf`; change the line (or use `override.conf`) if you use zsh or bash |
+| [JetBrainsMono Nerd Font](https://www.nerdfonts.com/) | Tab-bar icons and powerline glyphs |
 
-**Used by the keybinds / overlays**
+**Used by the keybinds and overlays**
 
-- [fzf](https://github.com/junegunn/fzf) 0.58+ — session picker, pane picker, agent picker and overview; 0.58 is where the `--list-border`/`--input-border`/`--preview-border` options the pickers use landed (tested with 0.74)
-- [zoxide](https://github.com/ajeetdsouza/zoxide) — source of session candidates
-- [bat](https://github.com/sharkdp/bat) + `less` — render the `ctrl+shift+/` keybinds tab
+| Tool | Why |
+| --- | --- |
+| [fzf](https://github.com/junegunn/fzf) 0.58+ | Session picker, pane picker, agent picker and overview. 0.58 is where the `--list-border` / `--input-border` / `--preview-border` options the pickers use landed (tested with 0.74) |
+| [zoxide](https://github.com/ajeetdsouza/zoxide) | Source of session candidates |
+| [bat](https://github.com/sharkdp/bat) + `less` | Render the `ctrl+g` `/` keybinds tab |
 
 **Optional**
 
-- [lazygit](https://github.com/jesseduffield/lazygit) — `alt+p g` and `ctrl+a>g`
-- [lazydocker](https://github.com/jesseduffield/lazydocker) — `alt+p d` and `ctrl+a>d`
-- `nvim` (or any `$EDITOR`) — for editing session files via the session picker
-
-## Screenshot
-
-![purrmux in action — vertical tab bar with agent statuses and the session/branch footer](assets/2026-07-31-14-33-11.png)
+| Tool | Reached by |
+| --- | --- |
+| [lazygit](https://github.com/jesseduffield/lazygit) | `ctrl+g` `g` |
+| [lazydocker](https://github.com/jesseduffield/lazydocker) | `ctrl+g` `d` |
+| [btop](https://github.com/aristocratos/btop) | `ctrl+g` `b` |
+| `nvim` (or any `$EDITOR`) | Editing session files via the session picker |
 
 ## Install
 
@@ -51,8 +82,8 @@ kitty --single-instance
 Put the flag wherever you launch from — a compositor keybind, a `.desktop` file's `Exec=`, or a shell alias. Without it every `kitty` invocation is a separate process with its own socket, and these quietly narrow to "only sees its own window":
 
 - `alt+]` / `alt+[` — session cycling; `cycle-session.py` enumerates the tabs on one socket, so other instances' sessions aren't in the rotation
-- `ctrl+a>k` with `--target=window` — the session opens in the instance you invoked it from; separate processes each accumulate their own unrelated set
-- `ctrl+a>a` and `ctrl+a>o` — "every agent across all sessions" means every agent in *this* instance
+- `ctrl+g o k` with `--target=window` — the session opens in the instance you invoked it from; separate processes each accumulate their own unrelated set
+- `ctrl+g o a` and `ctrl+g o o` — "every agent across all sessions" means every agent in *this* instance
 - the quake dropdown's `--main-listen-on auto` — `discover_main_listen_on()` takes the first socket it finds and warns `multiple kitty instances found`; export `KITTY_MAIN_LISTEN_ON` to pin one if you really do run several (or give each pool its own `--instance-group NAME`)
 
 ### Making it the default on macOS
@@ -86,11 +117,11 @@ Currently split that way:
 
 - **`listen_on`** — Linux uses an abstract unix socket (`unix:@kitty-…`); macOS uses a filesystem socket under `/tmp`.
 - **`bell_path`** — Linux points at the freedesktop stereo bell; macOS falls back to kitty's default bell (add your own `bell_path /System/Library/Sounds/Glass.aiff` in `os-macos.conf` if desired).
-- **`macos_option_as_alt yes`** (macOS) — every leader key here is Alt-based (`alt+p`, `alt+t`, `alt+s`, `alt+o`, `alt+g`, `alt+hjkl`, `alt+[` / `alt+]`), and kitty's default `no` makes Option produce Unicode input instead, which would leave all of them dead. The trade is Option-composed characters (`é`, `ü`) — put `macos_option_as_alt left` in `override.conf` to keep right-Option for input.
+- **`macos_option_as_alt yes`** (macOS) — the quick tier is Alt-based (`alt+hjkl`, `alt+[` / `alt+]`), and kitty's default `no` makes Option produce Unicode input instead, which would leave those six dead. The trade is Option-composed characters (`é`, `ü`) — put `macos_option_as_alt left` in `override.conf` to keep right-Option for input. The `ctrl+g` leader and everything under it are unaffected either way.
 - **`cmd+t` / `cmd+enter`** (macOS) — kitty defines these as plain `new_tab` / `new_window`, skipping the cwd-aware overrides `keybinds.conf` puts on `ctrl+shift+t` / `ctrl+shift+enter`. `os-macos.conf` repoints them at `new_tab_with_cwd` / `new_window_with_cwd` so new tabs and windows join the current session whichever key you reach for.
 - **scrollback overlays** — `kitty_mod+i` (nvim pager) and `kitty_mod+m` (scrollback as markdown) live in `os-linux.conf` only. `kitty_mod+i` copies over to `os-macos.conf` as-is; `kitty_mod+m` does not, because `mktemp --suffix=.md` is GNU-only and BSD `mktemp` has no `--suffix`. Use `f=$(mktemp -d)/scrollback.md` there instead — the extension is what makes nvim's markdown rendering fire, so it can't just be dropped.
 
-Everything else in [`KEYBINDS.md`](KEYBINDS.md) is identical across the two: `kitty_mod` is `ctrl+shift` on both platforms, and the `ctrl+a>…` chords and in-mode keys are plain characters.
+Everything else in [`KEYBINDS.md`](KEYBINDS.md) is identical across the two: `kitty_mod` is `ctrl+shift` on both platforms, and the `ctrl+g` leader and its in-mode keys are plain characters.
 
 ## Customizing without forking
 
@@ -116,7 +147,7 @@ shell zsh
 background_opacity 0.9
 
 # start with the horizontal tab bar instead of the sidebar. These are the same
-# three values ctrl+a>v sends at runtime, and also the fix on kitty older than
+# three values ctrl+g a v sends at runtime, and also the fix on kitty older than
 # 0.48, where `left` is not a valid tab_bar_edge
 tab_bar_edge bottom
 tab_bar_align center
@@ -130,11 +161,11 @@ macos_option_as_alt left
 map ctrl+shift+h launch --type=tab --tab-title="keybinds" sh -c 'bat --color=always --style=plain --language=md "$HOME/.config/kitty/KEYBINDS.md" | less -R'
 ```
 
-`allow_remote_control no` belongs here too if you want it — read the [Security note](#security-note) first, since it takes the session picker, pane picker, agent overview and tool tabs with it.
+`allow_remote_control no` belongs here too if you want it — read the [Security note](#security-note) first, since it takes the session picker, pane picker, agent overview and tool overlays with it.
 
 ## Vertical tab bar (sidebar)
 
-kitty 0.48 can put the tab bar on the left or right edge, and this config uses that by default: `kitty.conf` sets `tab_bar_edge left` with `tab_title_max_length 26` and `tab_bar_align start`. `ctrl+a>v` (or `v` in tab mode) switches to the horizontal bar and back at runtime — no restart, no config edit:
+kitty 0.48 can put the tab bar on the left or right edge, and this config uses that by default: `kitty.conf` sets `tab_bar_edge left` with `tab_title_max_length 26` and `tab_bar_align start`. `ctrl+g a v` switches to the horizontal bar and back at runtime — no restart, no config edit:
 
 ```sh
 tab_bar/toggle-edge.py [toggle|sidebar|horizontal|left|right|top|bottom|status]
@@ -150,13 +181,32 @@ The custom tab bar draws a different layout in sidebar mode (`tab_bar/vertical.p
 - **Agent status** on the spare row kitty gives each tab (`● working · claude`), for tabs running an agent only.
 - **A footer** carrying what the horizontal bar keeps in its side sections — agent attention, session, git branch, plus the keyboard mode (including zoom) and its hints. Drawn flat rather than as powerline chips, since stacked caps read as chunky pills in a narrow column, with each row's icon coloured from the theme palette. It's dropped entirely when the tabs need the rows.
 
-Knobs at the top of `tab_bar/config.py`: `VERTICAL_ACTIVE_MARKER`, `VERTICAL_SEPARATOR`, `VERTICAL_SHOW_STATUS`, `VERTICAL_SHOW_AGENT_STATUS`, `VERTICAL_FOOTER_STYLE`, `VERTICAL_FOOTER_ICON_COLORS`, and `VERTICAL_SECONDARY_TEXT_SCALE` (font size of the status and hint rows, via kitty's text sizing protocol — chips can't scale, their borders are glyphs). Sidebar side and width live in `tab_bar/toggle-edge.py` (`SIDEBAR_EDGE`, `SIDEBAR_CELLS`).
+### The keyboard mode row
+
+A mode change refreshes the tab bar and nothing else (kitty passes `refresh_active_tab_bar` as its only mode-change callback), so the footer is the one surface that can react to a mode while it's active. A which-key style popup would render fine — kitty's mapping layer takes keys before any window, so an overlay wouldn't steal them — but nothing would ever tell it to close.
+
+So the mode row does both jobs. Idle it shows `LEADER_HINT` (`^g`) rather than the word "normal", which is the only thing advertising the leader; in a mode it shows the mode's name and its keys.
+
+`MODE_HINT_STYLE` picks how those keys are drawn, from one grouped table in `tab_bar/config.py`:
+
+```
+"keys" (default)          "labels"
+ modes  p t s o a l        p pane        t tab
+ tools  g d b /            s scroll      o session
+                           a appearance  l lock
+                           g git         d docker
+                           b btop        / help
+```
+
+`"keys"` fits the leader in two rows and reads as a reminder; `"labels"` spends five and teaches instead, falling back to one per row when the sidebar is too narrow to split. When rows run short the hints are shed from the end, and the last one becomes `…+3 more` rather than disappearing quietly.
+
+Knobs at the top of `tab_bar/config.py`: `MODE_HINT_STYLE`, `LEADER_HINT`, `SHOW_LEADER_HINTS` (list the leader's keys while idle — horizontal bar only), `VERTICAL_ACTIVE_MARKER`, `VERTICAL_SEPARATOR`, `VERTICAL_SHOW_STATUS` (off hides the whole footer, leader row included), `VERTICAL_SHOW_AGENT_STATUS`, `VERTICAL_FOOTER_STYLE`, `VERTICAL_FOOTER_ICON_COLORS`, and `VERTICAL_SECONDARY_TEXT_SCALE` (font size of the status and hint rows, via kitty's text sizing protocol — chips can't scale, their borders are glyphs). Sidebar side and width live in `tab_bar/toggle-edge.py` (`SIDEBAR_EDGE`, `SIDEBAR_CELLS`).
 
 To start with the horizontal bar instead, put `tab_bar_edge bottom`, `tab_bar_align center` and `tab_title_max_length 0` in `override.conf` — the same values the toggle sends. That's also the fix on kitty older than 0.48, where `left` is not a valid edge.
 
 ## Agent attention hooks
 
-The custom tab bar and `ctrl+a>a` attention picker can show agent windows that need attention.
+The custom tab bar and `ctrl+g o a` attention picker can show agent windows that need attention.
 
 Install the bundled attention hooks/plugins:
 
@@ -181,9 +231,9 @@ Both hooks report state into kitty user vars: `agent_attention` (plus `agent_nam
 | `error` | — | `session.error` | red |
 | `idle` | `SessionStart` | — | muted `○` |
 
-`ctrl+a>o` opens the overview — every agent in every session, grouped, with a live preview of that agent's actual screen (`kitten @ get-text`), so you see the real progress rather than a summary of it. It refreshes itself: fzf listens on a loopback port and a ticker in the script posts `reload` to it every couple of seconds, keeping statuses, ages and counts current. Enter focuses the window, `ctrl-x` clears its attention, `ctrl-r` refreshes now. The `for` column is the age of `agent_status_at` — a transition time for one-shot statuses like `blocked`, and a heartbeat while `working`.
+`ctrl+g o o` opens the overview — every agent in every session, grouped, with a live preview of that agent's actual screen (`kitten @ get-text`), so you see the real progress rather than a summary of it. It refreshes itself: fzf listens on a loopback port and a ticker in the script posts `reload` to it every couple of seconds, keeping statuses, ages and counts current. Enter focuses the window, `ctrl-x` clears its attention, `ctrl-r` refreshes now. The `for` column is the age of `agent_status_at` — a transition time for one-shot statuses like `blocked`, and a heartbeat while `working`.
 
-`ctrl+a>a` lists the same statuses: every agent window, the ones wanting you first (`!`), then by status — `blocked`, `error`, `waiting`, `done`, `working`, `idle`. `ctrl-x` there drops a window's attention but keeps its status, since the agent is still running. Pass `--attention-only` to get the old attention-just-the-alerts list.
+`ctrl+g o a` lists the same statuses: every agent window, the ones wanting you first (`!`), then by status — `blocked`, `error`, `waiting`, `done`, `working`, `idle`. `ctrl-x` there drops a window's attention but keeps its status, since the agent is still running. Pass `--attention-only` to get the old attention-just-the-alerts list.
 
 `blocked`, `done` and `error` also raise attention when the window isn't focused. Tabs running an agent that hasn't reported (no hooks installed, or a fresh session) fall back to `waiting` when attention is set and `running` otherwise, based on the process in `AGENT_EXES`.
 

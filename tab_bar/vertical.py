@@ -133,6 +133,57 @@ def footer_cell(
     return factory(icon, text_fn, tab, minimal_icon_fg=icon_color)
 
 
+def hint_rows_keys(mode: str) -> list[str]:
+    """Grouped, keys only: ``modes  p t s o a l``.
+
+    Two rows for the leader against ten for a row per key, which matters in a
+    sidebar competing with the tabs for vertical space. Group names are padded
+    to a common width so the keys line up in a column.
+    """
+    groups = config.MODE_HINTS.get(mode, [])
+    if not groups:
+        return []
+
+    label_width = max(len(group) for group, _ in groups)
+    return [
+        f" {group.ljust(label_width)}  {' '.join(keys for keys, _ in items)}"
+        for group, items in groups
+    ]
+
+
+def hint_rows_labels(mode: str, width: int) -> list[str]:
+    """Every key with its own label, packed two to a row: ``p pane   t tab``.
+
+    Falls back to one per row when the sidebar is too narrow to split.
+    """
+    pairs = [f"{keys} {label}" for keys, label in config.iter_hints(mode)]
+    if not pairs:
+        return []
+
+    # Reading order runs across then down, so the columns interleave. The left
+    # column is sized from what actually lands in it rather than by halving the
+    # width, which would let a pair exactly filling its half run into its
+    # neighbour with no gutter at all.
+    left, right = pairs[0::2], pairs[1::2]
+    column = max(len(pair) for pair in left)
+    gutter = 2
+
+    if right and 1 + column + gutter + max(len(pair) for pair in right) > width:
+        return [f" {pair}" for pair in pairs]
+
+    rows = []
+    for index, entry in enumerate(left):
+        mate = right[index] if index < len(right) else ""
+        rows.append(f" {entry.ljust(column)}{' ' * gutter}{mate}".rstrip())
+    return rows
+
+
+def hint_rows(mode: str, width: int) -> list[str]:
+    if config.MODE_HINT_STYLE == "labels":
+        return hint_rows_labels(mode, width)
+    return hint_rows_keys(mode)
+
+
 def footer_rows(tab: TabBarData, width: int) -> list[tuple[str, Any]]:
     """The status rows to stack below the tabs, top-down."""
     rows: list[tuple[str, Any]] = []
@@ -143,9 +194,11 @@ def footer_rows(tab: TabBarData, width: int) -> list[tuple[str, Any]]:
     mode = get_current_mode()
     if mode or is_zoomed(tab):
         rows.append((MODE, get_mode_cell(tab)))
-        rows.extend(
-            (HINT, f" {key}{label}") for key, label in config.MODE_HINTS.get(mode, [])
-        )
+        rows.extend((HINT, text) for text in hint_rows(mode, width))
+    elif config.LEADER_HINT:
+        # Idle the row says how to reach everything else. It goes in as a plain
+        # chip, without the marker that means the keyboard is busy.
+        rows.append((CHIP, get_mode_cell(tab)))
 
     rows.append((CHIP, footer_cell("attention", config.ATTENTION_ICON, get_agent_attention_text, tab)))
     rows.append((CHIP, footer_cell("session", config.SESSION_ICON, get_sidebar_session_text, tab)))
@@ -163,15 +216,29 @@ def footer_rows(tab: TabBarData, width: int) -> list[tuple[str, Any]]:
 
 
 def trim_footer(rows: list[tuple[str, Any]], available: int) -> list[tuple[str, Any]]:
-    """Fit the footer into ``available`` rows, shedding mode hints first."""
+    """Fit the footer into ``available`` rows, shedding mode hints first.
+
+    What is shed is said out loud: dropping the tail of the list silently is
+    how the bar ends up claiming a mode has fewer keys than it does.
+    """
     if available <= 0:
         return []
 
+    dropped = 0
     while len(rows) > available:
         hints = [i for i, (kind, _) in enumerate(rows) if kind == HINT]
         if not hints:
             return rows[len(rows) - available :]
         del rows[hints[-1]]
+        dropped += 1
+
+    if dropped:
+        hints = [i for i, (kind, _) in enumerate(rows) if kind == HINT]
+        # The marker takes a row of its own, so it stands in for one more hint
+        # than was cut. With no hint row left to give up there is nowhere to
+        # put it, and the mode row alone has to carry the meaning.
+        if hints:
+            rows[hints[-1]] = (HINT, f" …+{dropped + 1} more")
 
     return rows
 

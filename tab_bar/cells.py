@@ -235,15 +235,21 @@ def get_mode_cell(tab: TabBarData) -> Cell:
     return accent_cell(icon, get_mode_text, tab)
 
 
+def _hint_cells(mode: str, tab: TabBarData) -> list[Cell]:
+    """One cell per key, flattened out of the mode's groups.
+
+    The horizontal bar lays hints out along a row, where the grouping the
+    sidebar uses to save vertical space buys nothing.
+    """
+    return [
+        muted_cell(f"{keys} ", get_static_text(label), tab)
+        for keys, label in config.iter_hints(mode)
+    ]
+
+
 def get_mode_hint_cells(tab: TabBarData) -> list[Cell]:
-    mode = get_current_mode()
-    return [
-        muted_cell(icon, get_static_text(label), tab)
-        for icon, label in config.MODE_HINTS.get(mode, [])
-    ]
+    return _hint_cells(get_current_mode(), tab)
 
 
-def get_sequence_hint_cells(tab: TabBarData) -> list[Cell]:
-    return [
-        muted_cell(icon, get_static_text(label), tab) for icon, label in config.SEQUENCE_HINTS
-    ]
+def get_leader_hint_cells(tab: TabBarData) -> list[Cell]:
+    return _hint_cells("leader", tab)

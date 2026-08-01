@@ -11,7 +11,7 @@ from .cells import (
     accent_cell,
     get_mode_cell,
     get_mode_hint_cells,
-    get_sequence_hint_cells,
+    get_leader_hint_cells,
     get_tab_cell,
     muted_cell,
 )
@@ -186,8 +186,8 @@ def draw_left(screen: Screen, max_length: int):
     if get_current_mode() == "":
         cells.append(muted_cell(config.SESSION_ICON, get_session_text, tab))
         cells.append(accent_cell(config.ATTENTION_ICON, get_agent_attention_text, tab))
-        if config.SHOW_SEQUENCE_HINTS:
-            cells.extend(get_sequence_hint_cells(tab))
+        if config.SHOW_LEADER_HINTS:
+            cells.extend(get_leader_hint_cells(tab))
     else:
         cells.extend(get_mode_hint_cells(tab))
 

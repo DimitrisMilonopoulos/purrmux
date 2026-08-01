@@ -103,6 +103,12 @@ def get_static_text(text: str) -> Callable[[int, TabBarData], str | None]:
 def get_mode_text(max_size: int, tab: TabBarData) -> str | None:
     text = get_mode_name(tab)
 
+    # Idle, the row is worth more as an advert for the leader than as the word
+    # "normal". Callers still style off get_mode_name, so this only changes the
+    # label, not whether the row reads as active.
+    if text == "normal" and config.LEADER_HINT:
+        text = config.LEADER_HINT
+
     if len(text) <= max_size:
         return text
     elif max_size >= 3:

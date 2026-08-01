@@ -1,0 +1,47 @@
+#!/bin/sh
+# Run a helper script from this kitty config by name.
+#
+# Exists so keybinds.conf can say `bg cycle-session.py` instead of repeating
+#   sh -c 'python3 "$HOME/.config/kitty/…/cycle-session.py" >> /tmp/….log 2>&1'
+# on every binding that reaches for one.
+#
+# Usage: kitty-run [--log] <script> [args…]
+#
+#   <script>  a bare name is resolved under session-management/; anything
+#             containing a slash is resolved against the config dir, so
+#             `tab_bar/toggle-edge.py` works too.
+#   --log     append stdout and stderr to $TMPDIR/kitty-<script>.log. Use it
+#             for `launch --type=background`, which discards output and would
+#             otherwise make failures invisible. Never use it for overlays:
+#             their stdout *is* the interface.
+set -eu
+
+log=''
+if [ "${1:-}" = '--log' ]; then
+    log=1
+    shift
+fi
+
+if [ $# -eq 0 ]; then
+    echo "kitty-run: no script given" >&2
+    exit 2
+fi
+
+# Derived from this script's own location rather than $KITTY_CONFIG_DIR, which
+# kitty does not export to launched programs.
+dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)
+
+name=$1
+shift
+
+case $name in
+    */*) path=$dir/$name ;;
+    *)   path=$dir/session-management/$name ;;
+esac
+
+if [ -n "$log" ]; then
+    logfile=${TMPDIR:-/tmp}/kitty-$(basename "$name" .py).log
+    exec python3 "$path" "$@" >>"$logfile" 2>&1
+fi
+
+exec python3 "$path" "$@"
