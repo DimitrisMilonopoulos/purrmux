@@ -129,8 +129,7 @@ def draw_rule(screen: Screen, column: int, rows: range, bg: int = 0) -> None:
 
     kitty has no option for a tab bar border, and it erases the tab bar screen
     before the first tab is drawn, so the whole column is painted from that
-    first call — then repainted over the rows an active band covered, this
-    time on the band's own background so the two meet with nothing between.
+    first call.
     """
     for row in rows:
         screen.cursor.x = column
@@ -449,11 +448,9 @@ def draw_list_tab(
     indent = 1 + len(dot) + len(gap)
     budget = width - indent
 
-    # The band is the sidebar's full width, not the text's: it starts at column
-    # zero whichever edge the rule is on.
     if tab.is_active:
         for offset in range(rows):
-            fill_row(screen, row + offset, 0, span, band)
+            fill_row(screen, row + offset, start, span, band)
 
     screen.cursor.x = start
     screen.cursor.y = row
@@ -511,33 +508,23 @@ def draw_vertical_tab(
     separator = config.VERTICAL_SEPARATOR
     on_right = draw_data.tab_bar_edge == "right"
 
-    # Two widths, because a band is background rather than text. kitty hands
-    # out a text budget of columns - 1, and drawing the band inside it left it
-    # short of the edge by that spare column, the rule's column, and the gutter
-    # keeping text off the rule. The band takes all three: it runs the full
-    # width and the rule is repainted on top of it. Stopping the band beside
-    # the rule is not enough — a rule is a glyph with its own padding inside
-    # its cell, so half a cell of gap survives and still reads as falling short.
+    # The band stops where the rule starts, one column short of the edge, so
+    # the rule stays a divider between the sidebar and the panes rather than a
+    # line drawn down the middle of a highlight. Text gets that same width with
+    # no gutter of its own: the column is worth more as one more character of
+    # title before it elides. kitty's budget (columns - 1) only caps it.
     rule = len(separator)
-    rule_column = 0 if on_right else screen.columns - rule
-    span = screen.columns
-    # Text runs right up to the rule with no gutter: the column buys a title
-    # one more character before it has to elide, which is worth more than the
-    # breathing room, and the rule is drawn thin enough not to crowd it.
-    width = max(1, min(max_length, screen.columns - rule))
+    span = max(1, screen.columns - rule)
+    width = max(1, min(max_length, span))
     content_column = rule if separator and on_right else 0
     if separator and index == 1:
-        draw_rule(screen, rule_column, range(screen.lines))
+        draw_rule(screen, 0 if on_right else screen.columns - rule, range(screen.lines))
 
     # kitty gives each tab two rows whenever there are few enough of them.
     rows = row_pitch if row + row_pitch <= screen.lines else 1
 
     if config.VERTICAL_TAB_STYLE == "list":
         draw_list_tab(screen, tab, row, span, width, content_column, rows)
-        if separator and tab.is_active:
-            draw_rule(
-                screen, rule_column, range(row, row + rows), get_colors().muted_body
-            )
     else:
         body_width = max(1, width - len(marker))
         screen.cursor.x = content_column
