@@ -2,7 +2,7 @@
 
 A tmux-ish kitty config — a `ctrl+g` leader driving modal pane/tab/scroll/session navigation, zoxide-backed session management, fzf pane and agent pickers, lazygit/lazydocker overlays, and a custom tab bar that doubles as the mode cheatsheet.
 
-![purrmux in action — vertical tab bar with agent statuses and the session/branch footer](assets/2026-07-31-14-33-11.png)
+![purrmux in action — the sidebar as a flat list of tabs on a surface of its own, an agent's status under the one running it, and the leader's keys laid out in the footer above the branch and session](assets/2026-08-02-12-44-40.png)
 
 ## At a glance
 
