@@ -5,7 +5,7 @@ from kitty.tab_bar import DrawData, ExtraData, TabBarData
 
 from . import config
 from .attention import get_agent_attention_text, refresh_agent_attention
-from .colors import get_colors
+from .colors import apply_bar_surface, get_colors
 from .cells import (
     Cell,
     accent_cell,
@@ -266,6 +266,9 @@ def draw_tab(
     if index == 1:
         session_tab_counts = {}
         refresh_agent_attention()
+        # Before anything is measured: it decides the sidebar's background, and
+        # with it whether a rule is needed and how wide the active band runs.
+        apply_bar_surface(screen, draw_data.tab_bar_edge in ("left", "right"))
     if tab.is_active:
         active_index = index - 1
 

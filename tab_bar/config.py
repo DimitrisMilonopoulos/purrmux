@@ -19,9 +19,13 @@ TAB_BAR_TEXT_SCALE: tuple[int, int] | None = None
 # VERTICAL_SEPARATOR: full-height rule down the inner edge, dividing the
 # sidebar from the panes ("" disables it, and the tabs take the column it was
 # holding — which also lets the active band run edge to edge).
-# VERTICAL_SEPARATOR_AUTO: leave that rule out when the theme sets
-# tab_bar_background far enough from background, since the two surfaces then
-# divide themselves and a rule on top of that boundary only doubles it.
+# VERTICAL_SEPARATOR_AUTO: leave that rule out when the sidebar has a
+# background of its own, since the two surfaces then divide themselves and a
+# rule on top of that boundary only doubles it.
+# VERTICAL_SURFACE: give the sidebar that background even on themes that ship
+# no tab_bar_background, by deriving one from the theme and writing it to the
+# tab bar screen. Costs no column, unlike the rule it replaces. False leaves
+# the bar on the theme's own background, and the rule comes back with it.
 # VERTICAL_SHOW_STATUS: the branch of the active tab —
 # plus the keyboard mode and its hints — stacked at the bottom of the sidebar.
 # VERTICAL_SHOW_AGENT_STATUS: agent status ("working · claude") on the spare row
@@ -33,6 +37,7 @@ TAB_BAR_TEXT_SCALE: tuple[int, int] | None = None
 VERTICAL_ACTIVE_MARKER = "▎"
 VERTICAL_SEPARATOR = "│"
 VERTICAL_SEPARATOR_AUTO = True
+VERTICAL_SURFACE = True
 VERTICAL_SHOW_STATUS = True
 VERTICAL_SHOW_AGENT_STATUS = True
 VERTICAL_SHOW_TAB_BRANCH = False

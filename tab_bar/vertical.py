@@ -39,10 +39,10 @@ from .cells import (
     muted_cell,
 )
 from .colors import (
+    bar_has_own_surface,
     get_colors,
     get_palette_color,
     get_status_color,
-    tab_bar_has_own_background,
 )
 from .modes import get_current_mode, is_zoomed
 from .text import (
@@ -132,11 +132,12 @@ def draw_footer_cell(
 def sidebar_separator() -> str:
     """The rule to divide the sidebar from the panes, if one is needed at all.
 
-    A theme that gives the tab bar its own background has already drawn that
-    division, in the one way that costs no column and cannot cut through a
-    highlight. Drawing a rule along the same edge only says it twice.
+    A sidebar with a background of its own — the theme's, or the one derived
+    for it by apply_bar_surface — has already drawn that division, in the one
+    way that costs no column and cannot cut through a highlight. Drawing a rule
+    along the same edge only says it twice.
     """
-    if config.VERTICAL_SEPARATOR_AUTO and tab_bar_has_own_background():
+    if config.VERTICAL_SEPARATOR_AUTO and bar_has_own_surface():
         return ""
     return config.VERTICAL_SEPARATOR
 

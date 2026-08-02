@@ -1,8 +1,10 @@
 from dataclasses import dataclass
 
-from kitty.fast_data_types import get_options
+from kitty.fast_data_types import Color, Screen, get_options
 from kitty.tab_bar import as_rgb
 from kitty.utils import color_as_int
+
+from . import config
 
 
 @dataclass(frozen=True)
@@ -62,6 +64,80 @@ def tab_bar_has_own_background() -> bool:
     return _distance(bar, color_as_int(opts.background)) >= _SAME_SURFACE
 
 
+# The surface we installed ourselves this frame, for a theme that ships none.
+_surface: int | None = None
+
+# How far that surface sits from the window background, in luminance. Measured
+# from the themes that do ship a tab_bar_background: the median gap is 0.05 and
+# the middle half runs 0.047 to 0.074.
+_SURFACE_STEP = 0.05
+
+
+def bar_background() -> int:
+    """The colour the tab bar screen is actually painted in.
+
+    kitty resolves the bar's own background to ``tab_bar_background`` where a
+    theme sets one and ``background`` otherwise. Every blend below is measured
+    from this rather than from ``background``, because this is the surface the
+    chips and bands are drawn on — the two are the same colour only on a theme
+    that gives the bar nothing of its own.
+    """
+    if _surface is not None:
+        return _surface
+    opts = get_options()
+    return color_as_int(opts.tab_bar_background or opts.background)
+
+
+def bar_has_own_surface() -> bool:
+    """Whether the bar reads as a surface separate from the panes."""
+    return _surface is not None or tab_bar_has_own_background()
+
+
+def derive_bar_surface() -> int:
+    """A surface for the tab bar, for themes that don't ship one.
+
+    Blended toward the theme's *foreground*, which lightens a dark theme and
+    darkens a light one. That is the direction the hand-written themes take
+    almost without exception — of the 60 dark themes whose tab bar differs from
+    their background, 46 go lighter, and every light one goes darker — and
+    blending toward the theme's own foreground keeps its hue rather than
+    washing the bar toward grey.
+    """
+    opts = get_options()
+    bg = color_as_int(opts.background)
+    fg = color_as_int(opts.foreground)
+    spread = abs(_luminance(fg) - _luminance(bg))
+    if spread < 0.01:
+        return bg
+    return _blend(bg, fg, min(0.25, _SURFACE_STEP / spread))
+
+
+def apply_bar_surface(screen: Screen, vertical: bool) -> None:
+    """Give the sidebar a background of its own where the theme hasn't.
+
+    kitty writes the bar screen's default background from ``tab_bar_background``
+    when it builds or relays out the bar, and nothing stops us writing it again
+    here. That costs no column and needs no cell painted: the screen is erased
+    before the first tab is drawn, and every cell we leave at the default
+    background — the gaps between rows included — resolves to whatever this is
+    set to at render time. kitty rewrites it on each reload and resize, so it
+    goes back on every frame rather than once.
+
+    Sidebar only. A horizontal bar sits along one edge with no long boundary to
+    divide, so tinting it is a look rather than a fix, and the panes keep it.
+    """
+    global _surface
+
+    if not (vertical and config.VERTICAL_SURFACE) or tab_bar_has_own_background():
+        _surface = None
+        return
+
+    _surface = derive_bar_surface()
+    screen.color_profile.default_bg = Color(
+        (_surface >> 16) & 0xFF, (_surface >> 8) & 0xFF, _surface & 0xFF
+    )
+
+
 def _readable_fg(chip_bg: int, dark: int, light: int) -> int:
     chip_l = _luminance(chip_bg)
     return (
@@ -103,7 +179,7 @@ def get_status_color(status: str) -> int:
 
 def get_colors() -> Colors:
     opts = get_options()
-    bg: int = color_as_int(opts.background)
+    bg: int = bar_background()
     fg: int = color_as_int(opts.foreground)
     cursor_int = color_as_int(opts.cursor)
     accent: int = cursor_int if _is_colorful(cursor_int) else color_as_int(opts.color4)
