@@ -17,8 +17,11 @@ TAB_BAR_TEXT_SCALE: tuple[int, int] | None = None
 # ("" disables it) — the "chip" tab style and the footer's mode row only, since
 # the "list" style marks the active tab by filling its band instead.
 # VERTICAL_SEPARATOR: full-height rule down the inner edge, dividing the
-# sidebar from the panes ("" disables it, and the tabs take the two columns it
-# was holding — the rule itself and the gutter keeping text off it).
+# sidebar from the panes ("" disables it, and the tabs take the column it was
+# holding — which also lets the active band run edge to edge).
+# VERTICAL_SEPARATOR_AUTO: leave that rule out when the theme sets
+# tab_bar_background far enough from background, since the two surfaces then
+# divide themselves and a rule on top of that boundary only doubles it.
 # VERTICAL_SHOW_STATUS: the branch of the active tab —
 # plus the keyboard mode and its hints — stacked at the bottom of the sidebar.
 # VERTICAL_SHOW_AGENT_STATUS: agent status ("working · claude") on the spare row
@@ -29,6 +32,7 @@ TAB_BAR_TEXT_SCALE: tuple[int, int] | None = None
 # cwd, so tabs in one project could disagree about its branch.
 VERTICAL_ACTIVE_MARKER = "▎"
 VERTICAL_SEPARATOR = "│"
+VERTICAL_SEPARATOR_AUTO = True
 VERTICAL_SHOW_STATUS = True
 VERTICAL_SHOW_AGENT_STATUS = True
 VERTICAL_SHOW_TAB_BRANCH = False

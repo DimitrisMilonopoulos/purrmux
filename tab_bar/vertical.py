@@ -38,7 +38,12 @@ from .cells import (
     get_tab_cell,
     muted_cell,
 )
-from .colors import get_colors, get_palette_color, get_status_color
+from .colors import (
+    get_colors,
+    get_palette_color,
+    get_status_color,
+    tab_bar_has_own_background,
+)
 from .modes import get_current_mode, is_zoomed
 from .text import (
     get_session_branch,
@@ -122,6 +127,18 @@ def draw_footer_cell(
     cell.draw(
         screen, max(1, width - len(marker)), config.VERTICAL_FOOTER_STYLE, cells, scale
     )
+
+
+def sidebar_separator() -> str:
+    """The rule to divide the sidebar from the panes, if one is needed at all.
+
+    A theme that gives the tab bar its own background has already drawn that
+    division, in the one way that costs no column and cannot cut through a
+    highlight. Drawing a rule along the same edge only says it twice.
+    """
+    if config.VERTICAL_SEPARATOR_AUTO and tab_bar_has_own_background():
+        return ""
+    return config.VERTICAL_SEPARATOR
 
 
 def draw_rule(screen: Screen, column: int, rows: range, bg: int = 0) -> None:
@@ -505,14 +522,16 @@ def draw_vertical_tab(
     observe_row(index, row)
 
     marker = config.VERTICAL_ACTIVE_MARKER
-    separator = config.VERTICAL_SEPARATOR
+    separator = sidebar_separator()
     on_right = draw_data.tab_bar_edge == "right"
 
-    # The band stops where the rule starts, one column short of the edge, so
-    # the rule stays a divider between the sidebar and the panes rather than a
-    # line drawn down the middle of a highlight. Text gets that same width with
-    # no gutter of its own: the column is worth more as one more character of
-    # title before it elides. kitty's budget (columns - 1) only caps it.
+    # With no rule the band runs the sidebar's full width, which is what it
+    # wants to be — an edge-to-edge highlight, not a pill. With one it stops
+    # where the rule starts, so the rule stays a divider between the sidebar
+    # and the panes rather than a line drawn down the middle of a highlight.
+    # Text gets that same width with no gutter of its own: the column is worth
+    # more as one more character of title before it elides. kitty's budget
+    # (columns - 1) only caps it.
     rule = len(separator)
     span = max(1, screen.columns - rule)
     width = max(1, min(max_length, span))

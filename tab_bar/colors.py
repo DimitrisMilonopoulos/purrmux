@@ -36,6 +36,32 @@ def _is_colorful(c: int, chroma_threshold: float = 0.20) -> bool:
     return (max(r, g, b) - min(r, g, b)) / 255 >= chroma_threshold
 
 
+def _distance(c1: int, c2: int) -> float:
+    """How far apart two colours are, 0..1, as their widest channel gap."""
+    return max(abs(((c1 >> s) & 0xFF) - ((c2 >> s) & 0xFF)) for s in (16, 8, 0)) / 255
+
+
+# A tab bar background this close to the window background is the same surface
+# as far as the eye is concerned, whatever the theme says.
+_SAME_SURFACE = 0.04
+
+
+def tab_bar_has_own_background() -> bool:
+    """Whether the theme gives the tab bar a background of its own.
+
+    kitty paints the bar in ``tab_bar_background`` when a theme sets one and in
+    ``background`` otherwise. A theme that sets it far enough from the window
+    background has already divided the sidebar from the panes, so nothing has
+    to be drawn to do it. A shade or two apart doesn't count — plenty of themes
+    set the option to the background they already have.
+    """
+    opts = get_options()
+    if opts.tab_bar_background is None:
+        return False
+    bar = color_as_int(opts.tab_bar_background)
+    return _distance(bar, color_as_int(opts.background)) >= _SAME_SURFACE
+
+
 def _readable_fg(chip_bg: int, dark: int, light: int) -> int:
     chip_l = _luminance(chip_bg)
     return (
