@@ -216,7 +216,7 @@ MODE_HINTS: dict[str, list[tuple[str, list[tuple[str, str]]]]] = {
     ],
     "appearancemode": [
         ("opacity", [("-=", "adjust"), ("0", "reset")]),
-        ("bar", [("v", "sidebar")]),
+        ("bar", [("v", "sidebar"), ("b", "hide")]),
     ],
     "locked": [
         ("unlock", [("^g", "exit")]),

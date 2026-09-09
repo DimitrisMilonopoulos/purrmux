@@ -93,6 +93,7 @@ Sticky.
 - `-` / `=` — decrease / increase opacity
 - `0` — reset opacity to default
 - `v` — toggle the vertical tab bar (sidebar)
+- `b` — hide the tab bar, and bring it back at the same edge
 
 ## Lock mode — `ctrl+g` `l`
 

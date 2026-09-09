@@ -135,12 +135,18 @@ shell zsh
 kitty 0.48 can put the tab bar on the left or right edge, and this config uses that by default: `kitty.conf` sets `tab_bar_edge left` with `tab_title_max_length 26` and `tab_bar_align start`. `ctrl+g a v` switches to the horizontal bar and back at runtime — no restart, no config edit:
 
 ```sh
-tab_bar/toggle-edge.py [toggle|sidebar|horizontal|left|right|top|bottom|status]
+tab_bar/toggle-edge.py [toggle|sidebar|horizontal|left|right|top|bottom|hide|show|toggle-hidden|status]
 ```
 
 Both directions send their own overrides rather than one of them falling back to `kitty.conf`, so the toggle behaves the same whichever edge is configured — the config only decides how kitty starts. Sidebar means `left` + 26 title cells + top-aligned tabs; horizontal means `bottom` + unlimited titles + centred tabs. Adjust either set at the top of `tab_bar/toggle-edge.py`.
 
-There is no remote-control command for setting an option, so the script reloads the config with `tab_bar_edge`/`tab_title_max_length`/`tab_bar_align` overrides (`kitten @ load-config -o …`) and reloads without them to go back. Being a config reload, it also resets runtime-only tweaks such as `set_background_opacity` to their configured values. State lives in `$XDG_RUNTIME_DIR/kitty-tab-bar-edge-*`, per kitty instance, falling back to `/tmp` when that variable is unset — which is the normal case on macOS.
+`ctrl+g a b` takes the bar away entirely and puts it back at the edge it was on, for when you want the full width for one thing. It's the same reload, so hiding is a state the script carries alongside the edge rather than a separate switch, and asking for an edge (`ctrl+g a v` included) brings a hidden bar back rather than moving one you can't see.
+
+What hides it is `tab_bar_min_tabs`, set absurdly high, rather than the `tab_bar_style hidden` that names the thing. Coming back out of `hidden` takes two reloads to land: kitty relayouts the tabs before it re-reads the style, so the first reload shows the bar without giving the panes their columns back. Too-few-tabs is read in time for that relayout — it's the same route kitty takes when a window has one tab — so both directions take one reload and neither leaves a gap.
+
+Hiding applies to the whole kitty instance, not to one OS window. Every option here comes from the global set that an instance's OS windows share, and kitty has nothing per-window to use instead: filtering a window's tabs away can't stand in for it, because the tabs a bar would show always include the active one. A separate kitty process, such as the quick-access terminal, keeps its own bar.
+
+There is no remote-control command for setting an option, so the script reloads the config with `tab_bar_edge`/`tab_title_max_length`/`tab_bar_align`/`tab_bar_min_tabs` overrides (`kitten @ load-config -o …`), passing all four every time — each call also passes `--ignore-overrides`, so nothing carries over from the last one. Being a config reload, it also resets runtime-only tweaks such as `set_background_opacity` to their configured values. State lives in `$XDG_RUNTIME_DIR/kitty-tab-bar-edge-*`, per kitty instance, falling back to `/tmp` when that variable is unset — which is the normal case on macOS.
 
 The custom tab bar draws a different layout in sidebar mode (`tab_bar/vertical.py`):
 
