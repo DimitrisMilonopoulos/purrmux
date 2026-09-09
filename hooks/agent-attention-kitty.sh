@@ -1,12 +1,14 @@
 #!/usr/bin/env bash
 set -u
 
-# Reports Claude's state into kitty user vars, which the tab bar renders:
+# Reports an agent's state into kitty user vars, which the tab bar renders:
 #   agent_status     working | blocked | done | idle  (drawn under agent tabs)
 #   agent_attention  1 while the agent wants you and you are looking elsewhere
 # Modes match those status names; "set" and "clear" are kept as aliases so an
-# older settings.json registration keeps working.
+# older settings.json registration keeps working. Claude Code and Codex both
+# call this — their hook events line up — so the caller names itself in $2.
 mode="${1:-set}"
+agent="${2:-claude}"
 window_id="${KITTY_WINDOW_ID:-}"
 
 if [ -z "$window_id" ] || ! command -v kitten >/dev/null 2>&1; then
@@ -37,7 +39,7 @@ now=$(date +%s 2>/dev/null || printf '0')
 # one-shot events (blocked, done) that is the transition, and while working it
 # doubles as a heartbeat.
 if [ -n "$status" ]; then
-  vars=(agent_status="$status" agent_name=claude agent_status_at="$now")
+  vars=(agent_status="$status" agent_name="$agent" agent_status_at="$now")
 else
   vars=(agent_status agent_name agent_status_at)
 fi

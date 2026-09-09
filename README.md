@@ -187,20 +187,23 @@ Install the bundled attention hooks/plugins:
 
 The installer is safe to rerun. It conditionally installs only what is available on your `PATH`:
 
-- If `claude` exists, it installs `claude-attention-kitty.sh` into `~/.claude/hooks/` and registers the `set` / `clear` hooks in `~/.claude/settings.json`.
+- If `claude` exists, it installs `agent-attention-kitty.sh` into `~/.claude/hooks/` and registers it in `~/.claude/settings.json`.
+- If `codex` exists, it installs the same script into `${CODEX_HOME:-~/.codex}/hooks/` and registers it in `${CODEX_HOME:-~/.codex}/hooks.json`. Codex reads hooks from `hooks.json` or from `config.toml` and warns when one layer has both, so the installer says so if your `config.toml` already declares any.
 - If `opencode` exists, it installs `opencode-attention-kitty.js` into `${XDG_CONFIG_HOME:-~/.config}/opencode/plugins/`.
 
-Hook/plugin files and Claude settings are replaced atomically. Reruns prune the installer's own registrations before adding them back, so changing which events a mode is attached to can't leave two modes firing per event. OpenCode loads local plugins on startup, so restart OpenCode after installing the plugin; Claude Code reads `settings.json` hooks at startup too.
+Claude Code and Codex fire the same hook events, so one script serves both; it takes the agent's name as its second argument and reports it as `agent_name`.
 
-Both hooks report state into kitty user vars: `agent_attention` (plus `agent_name`, `agent_attention_source`, `agent_attention_at`) flags a window that wants you while you're looking elsewhere, and `agent_status` carries what the agent is doing — which the sidebar draws on the row under each agent tab, dot coloured from the theme palette:
+Hook/plugin files and both JSON configs are replaced atomically. Reruns prune the installer's own registrations before adding them back, so changing which events a mode is attached to can't leave two modes firing per event. All three read their hooks at startup, so restart the agent after installing. Codex also gates new hooks behind a trust prompt — it offers *Hooks need review* on its next start, and until you accept it won't run them.
 
-| status | Claude event | OpenCode event | dot |
-| --- | --- | --- | --- |
-| `working` | `UserPromptSubmit`, `PostToolUse` | `tui.prompt.append`, `tool.execute.before` | yellow |
-| `blocked` | `Notification` (permission/idle/elicitation) | `question.asked`, `permission.asked` | red |
-| `done` | `Stop` | `session.idle` | blue |
-| `error` | — | `session.error` | red |
-| `idle` | `SessionStart` | — | muted `○` |
+The hooks report state into kitty user vars: `agent_attention` (plus `agent_name`, `agent_attention_source`, `agent_attention_at`) flags a window that wants you while you're looking elsewhere, and `agent_status` carries what the agent is doing — which the sidebar draws on the row under each agent tab, dot coloured from the theme palette:
+
+| status | Claude event | Codex event | OpenCode event | dot |
+| --- | --- | --- | --- | --- |
+| `working` | `UserPromptSubmit`, `PostToolUse` | `UserPromptSubmit`, `PostToolUse` | `tui.prompt.append`, `tool.execute.before` | yellow |
+| `blocked` | `Notification` (permission/idle/elicitation) | `PermissionRequest` | `question.asked`, `permission.asked` | red |
+| `done` | `Stop` | `Stop` | `session.idle` | blue |
+| `error` | — | — | `session.error` | red |
+| `idle` | `SessionStart` | `SessionStart` | — | muted `○` |
 
 `ctrl+g o o` opens the overview — every agent in every session, grouped, with a live preview of that agent's actual screen (`kitten @ get-text`), so you see the real progress rather than a summary of it. It refreshes itself: fzf listens on a loopback port and a ticker in the script posts `reload` to it every couple of seconds, keeping statuses, ages and counts current. Enter focuses the window, `ctrl-x` clears its attention, `ctrl-r` refreshes now. The `for` column is the age of `agent_status_at` — a transition time for one-shot statuses like `blocked`, and a heartbeat while `working`.
 
