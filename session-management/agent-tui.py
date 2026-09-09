@@ -221,9 +221,29 @@ def read_lines(*command: str) -> list[str]:
     return result.stdout.splitlines() if result.returncode == 0 else []
 
 
-def available_agents() -> list[str]:
-    found = [name for name in AGENT_COMMANDS if shutil.which(name)]
-    return found or list(AGENT_COMMANDS)
+def agent_program(name: str) -> list[str]:
+    """How to start an agent from a process that is not a login shell.
+
+    launch runs the program itself, with kitty's environment — and kitty was
+    started by the desktop session, whose PATH is /usr/local/bin:/usr/bin. No
+    ~/.local/bin, no version manager shims, so `claude` is simply not found.
+    Resolving it here, where the login PATH applies, fixes the common case;
+    anything still unfound goes through a login shell, which is how you would
+    have started it by hand.
+    """
+    found = shutil.which(name)
+    if found:
+        return [found]
+    return [os.environ.get("SHELL", "/bin/sh"), "-l", "-c", name]
+
+
+def available_agents() -> list[tuple[str, str]]:
+    """``(name, where it was found)``, so a surprise is visible before launch."""
+    found = [(name, shutil.which(name) or "") for name in AGENT_COMMANDS]
+    installed = [(name, path) for name, path in found if path]
+    if not installed:
+        return [(name, "via login shell") for name, _ in found]
+    return [(name, short_path(path)) for name, path in installed]
 
 
 def candidate_directories(running: list[Agent]) -> list[str]:
@@ -362,7 +382,7 @@ class SpawnScreen(ModalScreen[int | None]):
         self.paths = []
         await self.show(
             f"which agent, in {short_path(self.directory)}?",
-            [(name, "") for name in available_agents()],
+            available_agents(),
             filtering=False,
         )
 
@@ -436,7 +456,7 @@ class SpawnScreen(ModalScreen[int | None]):
             args += ["--match", f"id:{sibling.window_id}"]
         # --hold runs a shell once the agent exits, so quitting it leaves the
         # tab standing rather than taking the window with it.
-        args += ["--hold", command]
+        args += ["--hold", *agent_program(command)]
 
         result = agent_state.run_kitten(*args)
         window_id = None
@@ -471,8 +491,6 @@ def listed_id(item: ListItem) -> int | None:
 
 class AgentTui(App[None]):
     """List on the left, that agent's real screen on the right — or below."""
-
-    ENABLE_COMMAND_PALETTE = False
 
     CSS = """
     #header { padding: 0 1; color: $text-muted; height: 1; }
@@ -557,6 +575,9 @@ class AgentTui(App[None]):
         self.narrow = event.size.width < NARROW_COLUMNS
         self.query_one("#body").set_class(self.narrow, "narrow")
         self.apply_list_width()
+        # ctrl+p still opens it; the footer just has no room to say so when the
+        # keys that matter here already fill the line.
+        self.query_one(Footer).show_command_palette = not self.narrow
 
     def apply_list_width(self) -> None:
         """Give the list its columns back when it is sharing the screen.
