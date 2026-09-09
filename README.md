@@ -26,6 +26,7 @@ In pane mode `h/j/k/l` focus and `H/J/K/L` move — kitty parses a bare `H` iden
 - [Customizing without forking](#customizing-without-forking)
 - [Vertical tab bar (sidebar)](#vertical-tab-bar-sidebar)
 - [Agent attention hooks](#agent-attention-hooks)
+- [Agents from your phone](#agents-from-your-phone)
 - [Security note](#security-note)
 
 ## Prerequisites
@@ -216,6 +217,29 @@ The hooks report state into kitty user vars: `agent_attention` (plus `agent_name
 `ctrl+g o a` lists the same statuses: every agent window, the ones wanting you first (`!`), then by status — `blocked`, `error`, `waiting`, `done`, `working`, `idle`. `ctrl-x` there drops a window's attention but keeps its status, since the agent is still running. Pass `--attention-only` to get the old attention-just-the-alerts list.
 
 `blocked`, `done` and `error` also raise attention when the window isn't focused. Tabs running an agent that hasn't reported (no hooks installed, or a fresh session) fall back to `waiting` when attention is set and `running` otherwise, based on the process in `AGENT_EXES`.
+
+## Agents from your phone
+
+`session-management/agent-tui.py` shows the same state as the overview, laid out for a screen you hold upright: one column, three lines an agent, and a reply bar. It is a [Textual](https://textual.textualize.io) app run by uv, so there is nothing to install first — the shebang fetches textual the first time:
+
+```sh
+ssh box -t .config/kitty/session-management/agent-tui.py
+```
+
+Under about 90 columns it shows the list, then one agent's screen once you pick one, and `escape` goes back; wider than that, both sit side by side. The list refreshes every couple of seconds and so does whichever screen is open. Rows and buttons are tap targets if your ssh client sends mouse events.
+
+The reply bar is what makes it worth carrying: `1` `2` `3` answer a numbered permission prompt, `⏎` `esc` and `^C` do what they say, and anything typed in the input is sent with a newline. `enter` opens, `escape` goes back, `r` refreshes, `x` clears attention, `f` focuses that window back on the desktop, `i` interrupts, `w` toggles wrapping, `[` and `]` resize the list beside the screen, `q` quits.
+
+`n` starts a new agent, which is three lists: a folder (the ones with agents in them first, then `zoxide query -l`), then — if that folder's repo has more than one worktree — which worktree, then `claude`, `codex` or `opencode`. Both folder steps filter as you type, and `enter` takes the top hit, so a worktree out of fifty is a few letters. It launches as
+
+```sh
+kitten @ launch --type=tab --cwd=<worktree> --tab-title=<agent> \
+  --var kitty_zoxide_session=<folder name> --match id:<a window in that session> --hold <agent>
+```
+
+The user var is what makes the new tab group with its session everywhere else — the sidebar, the overview, the picker — since `agents.py` reads `kitty_zoxide_session` first. It goes in the OS window of an agent already running for that session, and gets an OS window of its own when there is none. `--hold` runs a shell once the agent exits, so quitting the agent leaves the tab rather than taking the window with it.
+
+Unlike the other scripts it is not launched by kitty, so there is no control socket to inherit: it finds a running instance from `pgrep kitty` and the pid-named socket `os-linux.conf`/`os-macos.conf` ask for, or takes one as `--to unix:@kitty-1234`. Reaching the machine is ssh's problem — Tailscale, a jump host, whatever you already use. Nothing here opens a port.
 
 ## Security note
 

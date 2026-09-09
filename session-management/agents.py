@@ -68,10 +68,79 @@ def child_listen_on() -> str:
     return f"unix:@kitty-{pid}"
 
 
+_control_address = ""
+
+
+def use_control_address(address: str) -> None:
+    """Send every later ``kitten @`` to this instance rather than our own.
+
+    A client kitty launched inherits a socket; one you ssh in and start has to
+    be told which instance it is looking at.
+    """
+    global _control_address
+    _control_address = address
+
+
+def address_args() -> list[str]:
+    return ["--to", _control_address] if _control_address else []
+
+
+def kitty_pids() -> list[int]:
+    """Pids of the running kitty instances, newest first."""
+    try:
+        result = subprocess.run(
+            ["pgrep", "-x", "kitty"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+        )
+    except FileNotFoundError:
+        return []
+    pids = [int(line) for line in result.stdout.split() if line.isdigit()]
+    return sorted(pids, reverse=True)
+
+
+def socket_for_pid(pid: int) -> str:
+    """The address os-${KITTY_OS}.conf gives an instance with this pid."""
+    if sys.platform == "darwin":
+        return f"unix:/tmp/mykitty-{pid}"
+    return f"unix:@kitty-{pid}"
+
+
+def discover_control_address() -> str:
+    """An address for a running kitty, found rather than inherited.
+
+    Prefers whatever this process was handed, which is right when the client
+    runs inside kitty. Outside it — over ssh, or served to a browser — the
+    sockets are named after the pid, so the running instances can be tried in
+    turn and the first one that answers wins.
+    """
+    listen_on = os.environ.get("KITTY_LISTEN_ON", "")
+    if listen_on and not listen_on.startswith("fd:"):
+        return listen_on
+
+    for pid in kitty_pids():
+        address = socket_for_pid(pid)
+        try:
+            probe = subprocess.run(
+                ["kitten", "@", "--to", address, "ls"],
+                check=False,
+                stdout=subprocess.DEVNULL,
+                stderr=subprocess.DEVNULL,
+                timeout=5,
+            )
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            return ""
+        if probe.returncode == 0:
+            return address
+    return ""
+
+
 def run_kitten(*args: str) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
-            ["kitten", "@", *args],
+            ["kitten", "@", *address_args(), *args],
             check=False,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
