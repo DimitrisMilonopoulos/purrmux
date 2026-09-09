@@ -88,12 +88,13 @@ One-shot.
 
 ## Appearance mode — `ctrl+g` `a`
 
-Sticky.
+Sticky, so opacity can be nudged a step at a time.
 
 - `-` / `=` — decrease / increase opacity
 - `0` — reset opacity to default
 - `v` — toggle the vertical tab bar (sidebar)
-- `b` — hide the tab bar, and bring it back at the same edge
+- `b` — hide the tab bar, and bring it back at the same edge; exits the mode,
+  being done in one press
 
 ## Lock mode — `ctrl+g` `l`
 
