@@ -230,6 +230,8 @@ Under about 90 columns it shows the list, then one agent's screen once you pick 
 
 The reply bar is what makes it worth carrying: `1` `2` `3` answer a numbered permission prompt, `⏎` `esc` and `^C` do what they say, and anything typed in the input is sent with a newline. `enter` opens, `escape` goes back, `r` refreshes, `x` clears attention, `f` focuses that window back on the desktop, `i` interrupts, `w` toggles wrapping, `[` and `]` resize the list beside the screen, `q` quits.
 
+It takes its colours from the kitty it is driving rather than from the phone: `kitten @ get-colors` reports the live palette over the same socket, a textual theme is cut from it, and the SGR codes `agents.py` uses for the fzf list and the sidebar dots are resolved against that palette — so the TUI is Gruvbox while kitty is, and changes with it. Each row carries a band of its status behind the full width, loud for the ones wanting you and barely there for the rest, which is the sidebar's trick: a band costs no columns, and columns are the scarce thing on a phone.
+
 `n` starts a new agent, which is three lists: a folder (the ones with agents in them first, then `zoxide query -l`), then — if that folder's repo has more than one worktree — which worktree, then `claude`, `codex` or `opencode`. Both folder steps filter as you type, and `enter` takes the top hit, so a worktree out of fifty is a few letters. It launches as
 
 ```sh

@@ -39,9 +39,12 @@ from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
 from textual.binding import Binding
+from textual.color import Color
 from textual.containers import Horizontal, Vertical, VerticalScroll
 from textual.events import Resize
 from textual.screen import ModalScreen
+from textual.theme import Theme
+from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, ListItem, ListView, Static
 
 REFRESH_SECONDS = 2.0
@@ -71,13 +74,84 @@ REPLIES = [
 ]
 
 
-def ansi(text: str, code: str) -> Text:
-    """Colour something the way the fzf list and the tab bar colour it.
+# SGR colour codes, as agents.py writes them, to a slot in the 16-colour
+# palette. Bold with a colour is how every terminal this config targets asks
+# for the bright half, so it shifts by eight rather than thickening the font.
+SGR_SLOTS = {str(30 + slot): slot for slot in range(8)}
 
-    The codes live in agents.py so the two front ends can't drift apart; rich
-    parses them back out.
+_palette: dict[str, str] = {}
+
+
+def palette() -> dict[str, str]:
+    """The colours the running kitty is actually using.
+
+    Read over the control socket rather than out of current-theme.conf, so the
+    TUI follows a theme change without being told, and so it shows kitty's
+    palette even on a phone whose terminal has its own ideas about #ff0000.
     """
-    return Text.from_ansi(agent_state.color(text, code, ansi=True))
+    if not _palette:
+        result = agent_state.run_kitten("get-colors")
+        if result is not None and result.returncode == 0:
+            for line in result.stdout.splitlines():
+                key, _, value = line.partition(" ")
+                value = value.strip()
+                if key and value.startswith("#"):
+                    _palette[key] = value
+    return _palette
+
+
+def hue(key: str, fallback: str) -> str:
+    return palette().get(key, fallback)
+
+
+def slot(index: int, fallback: str) -> str:
+    return hue(f"color{index}", fallback)
+
+
+def dimmed(color: str) -> str:
+    """Half way to the background, which is what dim means here."""
+    background = Color.parse(hue("background", "#1e1e1e"))
+    return Color.parse(color).blend(background, 0.45).hex
+
+
+def style_for(code: str) -> str:
+    """One of agents.py's SGR codes, resolved against kitty's palette.
+
+    agents.py stays the single place that decides a status is red; this decides
+    which red, so the phone, the fzf overview and the sidebar dots agree.
+    """
+    parts = code.split(";")
+    index = next((SGR_SLOTS[part] for part in parts if part in SGR_SLOTS), None)
+    if index is None:
+        return dimmed(hue("foreground", "#d0d0d0")) if "2" in parts else ""
+    if "1" in parts:
+        index += 8
+    color = slot(index, "#d0d0d0")
+    return dimmed(color) if "2" in parts else color
+
+
+def ansi(text: str, code: str) -> Text:
+    """Colour something the way the fzf list and the tab bar colour it."""
+    return Text(text, style=style_for(code))
+
+
+def purrmux_theme() -> Theme:
+    """A textual theme cut from the kitty theme, so the two look like one thing."""
+    background = hue("background", "#1e1e1e")
+    return Theme(
+        name="purrmux",
+        primary=slot(12, "#7aa2f7"),
+        secondary=slot(13, "#bb9af7"),
+        accent=hue("active_tab_background", slot(11, "#e0af68")),
+        warning=slot(11, "#e0af68"),
+        error=slot(9, "#f7768e"),
+        success=slot(10, "#9ece6a"),
+        foreground=hue("foreground", "#d0d0d0"),
+        background=background,
+        surface=Color.parse(background).blend(Color.parse(slot(0, "#303030")), 0.5).hex,
+        panel=slot(0, "#303030"),
+        dark=Color.parse(background).brightness < 0.5,
+    )
 
 
 def row_text(agent: Agent, width: int) -> Text:
@@ -114,13 +188,21 @@ def row_text(agent: Agent, width: int) -> Text:
 
 
 def title_text(agent: Agent) -> Text:
+    # Age before branch: on 46 columns something has to go, and it should be
+    # the end of a worktree name rather than how long it has been stuck.
     where = " · ".join(filter(None, [agent.agent, agent.session, agent.branch]))
-    age = f" · {agent.age}" if agent.age else ""
-    return Text.assemble(
+    title = Text.assemble(
         ansi(f"{agent.dot} {agent.status}", agent.status_color),
         " ",
-        ansi(f"{where}{age}", "2;37"),
+        ansi(agent.age, "2;37"),
+        " ",
+        ansi(where, "2;37"),
     )
+    # One line, whatever the branch is called: three rows of wrapped worktree
+    # name is most of a phone screen.
+    title.no_wrap = True
+    title.overflow = "ellipsis"
+    return title
 
 
 def read_lines(*command: str) -> list[str]:
@@ -189,6 +271,15 @@ def short_path(path: str) -> str:
     return "~" + path[len(home) :] if path.startswith(home) else path
 
 
+def elide(text: str, width: int) -> str:
+    """Trim a path from the left, since its end is the part that identifies it.
+
+    ``…c/worktrees/dark-mode-toggle`` says what you picked;
+    ``~/src/worktrees/dark-mode-tog…`` says what you were looking in.
+    """
+    return text if len(text) <= width else "…" + text[-(width - 1) :]
+
+
 class SpawnScreen(ModalScreen[int | None]):
     """Start an agent: pick a folder, its worktree if it has several, then who.
 
@@ -221,14 +312,19 @@ class SpawnScreen(ModalScreen[int | None]):
 
     async def show(self, title: str, choices: list[tuple[str, str]], *, filtering: bool) -> None:
         self.choices = choices
-        self.query_one("#spawn-title", Static).update(title)
+        self.query_one("#spawn-title", Static).update(
+            Text.assemble(title, " ", ansi("· esc cancels", "2;37"))
+        )
         self.query_one("#spawn-filter", Input).display = filtering
         listing = self.query_one("#spawn-list", ListView)
+        # Four columns of padding and scrollbar inside the list, and two more
+        # of the modal's own on the first pass, before the list has a size.
+        width = max(20, (listing.size.width - 4) if listing.size.width else self.app.size.width - 6)
         await listing.clear()
         for index, (label, detail) in enumerate(choices):
-            row = Text(label, no_wrap=True, overflow="ellipsis")
+            row = Text(elide(label, width))
             if detail:
-                row = Text.assemble(row, "\n   ", ansi(detail, "2;37"))
+                row = Text.assemble(row, "\n   ", ansi(elide(detail, width - 3), "2;37"))
             await listing.append(ListItem(Static(row), id=f"choice-{index}"))
         if choices:
             listing.index = 0
@@ -357,6 +453,17 @@ def listed_index(item: ListItem | None) -> int | None:
     return int(item.id.removeprefix("choice-")) if item and item.id else None
 
 
+def band(widget: Widget, agent: Agent) -> None:
+    """Carry an agent's status on a widget as classes, for the CSS to colour.
+
+    Set one at a time rather than assigning ``classes``, which would take
+    textual's own ``-highlight`` off the row with it.
+    """
+    for status in agent_state.STATUS_ORDER:
+        widget.set_class(agent.status == status, f"status-{status}")
+    widget.set_class(agent.has_attention, "attention")
+
+
 def listed_id(item: ListItem) -> int | None:
     """The window a list row stands for, read back off its widget id."""
     return int(item.id.removeprefix("agent-")) if item.id else None
@@ -365,21 +472,36 @@ def listed_id(item: ListItem) -> int | None:
 class AgentTui(App[None]):
     """List on the left, that agent's real screen on the right — or below."""
 
+    ENABLE_COMMAND_PALETTE = False
+
     CSS = """
     #header { padding: 0 1; color: $text-muted; height: 1; }
     #body { height: 1fr; }
     #agents { width: 46; height: 1fr; background: $surface; }
     #agents > ListItem { padding: 0 1; }
+
+    /* A band behind the whole row rather than a marker beside it: the sidebar
+       does the same, and a band costs no columns, which is the scarce thing
+       here. Attention is the loud one; the rest are barely there until you
+       scan the column. */
+    #agents > ListItem.status-blocked, #agents > ListItem.status-error,
+    #detail-title.status-blocked, #detail-title.status-error { background: $error 5%; }
+    #agents > ListItem.status-waiting, #agents > ListItem.status-working,
+    #detail-title.status-waiting, #detail-title.status-working { background: $warning 5%; }
+    #agents > ListItem.status-done, #detail-title.status-done { background: $primary 5%; }
+    #agents > ListItem.attention { background: $error 12%; }
+    /* Last, so the row you are on wins over whatever band it carries. */
+    #agents > ListItem.-highlight { background: $accent 35%; }
     #detail { width: 1fr; height: 1fr; }
-    #detail-title { padding: 0 1; height: auto; border-bottom: solid $panel; }
+    #detail-title { padding: 0 1; height: 1; }
     #screen-scroll { height: 1fr; padding: 0 1; }
     #replies { height: 3; align-horizontal: center; }
     #replies > Button { min-width: 7; margin: 0 1; }
-    #reply { border: solid $panel; }
+    #reply { border: none; height: 1; padding: 0 1; background: $panel; }
 
     #spawn { width: 100%; height: 100%; background: $surface; padding: 1; }
     #spawn-title { height: 1; color: $text-muted; padding: 0 1; }
-    #spawn-filter { border: solid $panel; }
+    #spawn-filter { border: none; height: 1; padding: 0 1; background: $panel; }
     #spawn-list { height: 1fr; }
     #spawn-list > ListItem { padding: 0 1; }
 
@@ -393,11 +515,11 @@ class AgentTui(App[None]):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "back", "back"),
         Binding("n", "new_agent", "new"),
-        Binding("r", "refresh", "refresh"),
+        Binding("r", "refresh", "refresh", show=False),
         Binding("x", "clear_attention", "clear !"),
-        Binding("f", "focus_window", "focus"),
+        Binding("f", "focus_window", "focus", show=False),
         Binding("i", "interrupt", "^C"),
-        Binding("w", "toggle_wrap", "wrap"),
+        Binding("w", "toggle_wrap", "wrap", show=False),
         Binding("[", "narrower", "narrower", show=False),
         Binding("]", "wider", "wider", show=False),
         Binding("q", "quit", "quit"),
@@ -426,6 +548,8 @@ class AgentTui(App[None]):
         yield Footer()
 
     def on_mount(self) -> None:
+        self.register_theme(purrmux_theme())
+        self.theme = "purrmux"
         self.load_agents()
         self.set_interval(REFRESH_SECONDS, self.tick)
 
@@ -496,14 +620,15 @@ class AgentTui(App[None]):
             index = ids.index(self.selected) if self.selected in ids else 0
             await listing.clear()
             for agent in found:
-                await listing.append(
-                    ListItem(Static(row_text(agent, width)), id=f"agent-{agent.window_id}")
-                )
+                item = ListItem(Static(row_text(agent, width)), id=f"agent-{agent.window_id}")
+                await listing.append(item)
+                band(item, agent)
             if found:
                 listing.index = index
         else:
             for agent, item in zip(found, listing.children):
                 item.query_one(Static).update(row_text(agent, width))
+                band(item, agent)
 
         if self.selected not in ids:
             self.selected = ids[0] if ids else None
@@ -513,7 +638,9 @@ class AgentTui(App[None]):
     def show_title(self) -> None:
         agent = self.agent_by_id(self.selected)
         if agent is not None:
-            self.query_one("#detail-title", Static).update(title_text(agent))
+            title = self.query_one("#detail-title", Static)
+            title.update(title_text(agent))
+            band(title, agent)
 
     def show_screen(self, window_id: int, raw: str) -> None:
         if window_id != self.selected:
