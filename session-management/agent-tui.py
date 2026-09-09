@@ -493,7 +493,15 @@ class AgentTui(App[None]):
     """List on the left, that agent's real screen on the right — or below."""
 
     CSS = """
-    #header { padding: 0 1; color: $text-muted; height: 1; }
+    #header-bar { height: 1; }
+    /* A header-height tap target rather than a button-looking button: it sits
+       in a one-row bar, where textual's default chrome reads as an alarm. */
+    #toggle-list {
+        min-width: 3; width: 3; height: 1; border: none;
+        background: $panel; color: $text-muted; text-style: none;
+    }
+    #toggle-list:hover { background: $accent; color: $background; }
+    #header { padding: 0 1; color: $text-muted; height: 1; width: 1fr; }
     #body { height: 1fr; }
     #agents { width: 46; height: 1fr; background: $surface; }
     #agents > ListItem { padding: 0 1; }
@@ -523,6 +531,9 @@ class AgentTui(App[None]):
     #spawn-list { height: 1fr; }
     #spawn-list > ListItem { padding: 0 1; }
 
+    /* Wide: the list can be folded away to give a screen the whole window. */
+    #body.collapsed #agents { display: none; }
+
     /* Portrait: one thing at a time, the list until you pick something. */
     #body.narrow #agents { width: 1fr; }
     #body.narrow #detail { display: none; }
@@ -533,6 +544,7 @@ class AgentTui(App[None]):
     BINDINGS: ClassVar[list[Binding]] = [
         Binding("escape", "back", "back"),
         Binding("n", "new_agent", "new"),
+        Binding("b", "toggle_list", "list", show=False),
         Binding("r", "refresh", "refresh", show=False),
         Binding("x", "clear_attention", "clear !"),
         Binding("f", "focus_window", "focus", show=False),
@@ -552,7 +564,9 @@ class AgentTui(App[None]):
         self.list_width = LIST_WIDTH
 
     def compose(self) -> ComposeResult:
-        yield Static(id="header")
+        with Horizontal(id="header-bar"):
+            yield Button("☰", id="toggle-list", compact=True)
+            yield Static(id="header")
         with Horizontal(id="body"):
             yield ListView(id="agents")
             with Vertical(id="detail"):
@@ -702,6 +716,9 @@ class AgentTui(App[None]):
             self.open_selected()
 
     def on_button_pressed(self, event: Button.Pressed) -> None:
+        if event.button.id == "toggle-list":
+            self.action_toggle_list()
+            return
         if self.selected is None or event.button.id is None:
             return
         index = int(event.button.id.removeprefix("reply-"))
@@ -740,6 +757,23 @@ class AgentTui(App[None]):
     def action_interrupt(self) -> None:
         if self.selected is not None:
             self.send(self.selected, r"\x03")
+
+    def action_toggle_list(self) -> None:
+        """Take the list away, or bring it back.
+
+        Portrait has room for one of the two, so the toggle is the same gesture
+        as picking an agent and going back; wider, it folds the list off to the
+        side and gives the screen the whole window.
+        """
+        body = self.query_one("#body")
+        if self.narrow:
+            body.toggle_class("open")
+        else:
+            body.toggle_class("collapsed")
+        if not body.has_class("open") and self.narrow:
+            self.query_one("#agents", ListView).focus()
+        elif self.selected is not None:
+            self.load_screen(self.selected)
 
     def action_new_agent(self) -> None:
         self.push_screen(SpawnScreen(self.agents), self.spawned)

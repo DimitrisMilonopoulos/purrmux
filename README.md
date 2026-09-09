@@ -226,7 +226,7 @@ The hooks report state into kitty user vars: `agent_attention` (plus `agent_name
 ssh box -t .config/kitty/session-management/agent-tui.py
 ```
 
-Under about 90 columns it shows the list, then one agent's screen once you pick one, and `escape` goes back; wider than that, both sit side by side. The list refreshes every couple of seconds and so does whichever screen is open. Rows and buttons are tap targets if your ssh client sends mouse events.
+Under about 90 columns it shows the list, then one agent's screen once you pick one, and `escape` goes back; wider than that, both sit side by side. `☰` in the corner — or `b` — takes the list away and brings it back: in portrait that is the same swap as picking an agent and going back, and wider it folds the list off so a screen has the whole window. The list refreshes every couple of seconds and so does whichever screen is open. Rows and buttons are tap targets if your ssh client sends mouse events.
 
 The reply bar is what makes it worth carrying: `1` `2` `3` answer a numbered permission prompt, `⏎` `esc` and `^C` do what they say, and anything typed in the input is sent with a newline. `enter` opens, `escape` goes back, `r` refreshes, `x` clears attention, `f` focuses that window back on the desktop, `i` interrupts, `w` toggles wrapping, `[` and `]` resize the list beside the screen, `q` quits.
 
