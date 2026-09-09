@@ -12,9 +12,12 @@ from __future__ import annotations
 import json
 import os
 import re
+import socket
 import subprocess
 import sys
+import threading
 import time
+from contextlib import suppress
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -70,6 +73,137 @@ def child_listen_on() -> str:
 
 _control_address = ""
 
+# kitty's remote control protocol: one escape-code framed JSON message each
+# way. https://sw.kovidgoyal.net/kitty/rc_protocol/
+CONTROL_PREFIX = b"\x1bP@kitty-cmd"
+CONTROL_SUFFIX = b"\x1b\\"
+CONTROL_TIMEOUT = 5.0
+
+_kitty_version: list[int] = []
+_control_lock = threading.Lock()
+
+
+def kitty_version() -> list[int]:
+    """The version to stamp on protocol messages, asked of kitten once."""
+    if _kitty_version:
+        return _kitty_version
+    version = [0, 42, 0]
+    try:
+        result = subprocess.run(
+            ["kitten", "--version"],
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+        match = re.search(r"(\d+)\.(\d+)\.(\d+)", result.stdout)
+        if match:
+            version = [int(part) for part in match.groups()]
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        pass
+    _kitty_version.extend(version)
+    return _kitty_version
+
+
+class ControlSocket:
+    """A held connection to the socket ``kitten @`` opens and closes each time.
+
+    Most of a ``kitten @`` call is the process, not the work: a screen it
+    fetches in 39ms comes back over an open socket in half of one. Only the two
+    commands a poller repeats are hand-rolled here — everything else stays on
+    the CLI, which knows how to turn arguments into payloads for every command
+    kitty has.
+    """
+
+    def __init__(self, address: str) -> None:
+        self.address = address
+        self.sock: socket.socket | None = None
+
+    def endpoint(self) -> str | None:
+        if not self.address.startswith("unix:"):
+            return None
+        path = self.address.removeprefix("unix:")
+        # @name is an abstract socket, which python spells with a leading NUL.
+        return "\0" + path[1:] if path.startswith("@") else path
+
+    def connect(self) -> socket.socket | None:
+        if self.sock is not None:
+            return self.sock
+        endpoint = self.endpoint()
+        if endpoint is None:
+            return None
+        try:
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(CONTROL_TIMEOUT)
+            sock.connect(endpoint)
+        except OSError:
+            return None
+        self.sock = sock
+        return sock
+
+    def call(self, cmd: str, payload: dict[str, object]) -> object | None:
+        """A command's ``data``, or None if the socket could not answer it.
+
+        Any failure drops the connection rather than being reasoned about: this
+        call falls back to the CLI and the next one reconnects. kitty documents
+        a connection per query, so a held one is a courtesy it extends rather
+        than a promise it makes.
+        """
+        sock = self.connect()
+        if sock is None:
+            return None
+        message = {"cmd": cmd, "version": kitty_version(), "payload": payload}
+        try:
+            sock.sendall(CONTROL_PREFIX + json.dumps(message).encode() + CONTROL_SUFFIX)
+            buffer = b""
+            while CONTROL_SUFFIX not in buffer:
+                chunk = sock.recv(65536)
+                if not chunk:
+                    raise OSError("kitty closed the control socket")
+                buffer += chunk
+            body = buffer.split(b"@kitty-cmd", 1)[1].rsplit(CONTROL_SUFFIX, 1)[0]
+            response = json.loads(body)
+        except (OSError, ValueError, IndexError):
+            self.close()
+            return None
+        return response.get("data") if response.get("ok") else None
+
+    def close(self) -> None:
+        if self.sock is not None:
+            with suppress(OSError):
+                self.sock.close()
+        self.sock = None
+
+
+_control: ControlSocket | None = None
+
+
+def control() -> ControlSocket | None:
+    """The held socket, built from whichever address this process can reach."""
+    global _control
+    if _control is None:
+        address = _control_address or child_listen_on()
+        if not address.startswith("unix:"):
+            return None
+        _control = ControlSocket(address)
+    return _control
+
+
+def rc(cmd: str, payload: dict[str, object]) -> object | None:
+    """One remote control command, or None to say ask the CLI instead.
+
+    Serialised: one connection can only have one message in flight, and the
+    pollers run in threads of their own.
+    """
+    client = control()
+    if client is None:
+        return None
+    with _control_lock:
+        return client.call(cmd, payload)
+
+
+
 
 def use_control_address(address: str) -> None:
     """Send every later ``kitten @`` to this instance rather than our own.
@@ -77,8 +211,11 @@ def use_control_address(address: str) -> None:
     A client kitty launched inherits a socket; one you ssh in and start has to
     be told which instance it is looking at.
     """
-    global _control_address
+    global _control_address, _control
     _control_address = address
+    if _control is not None:
+        _control.close()
+    _control = None
 
 
 def address_args() -> list[str]:
@@ -153,6 +290,11 @@ def run_kitten(*args: str) -> subprocess.CompletedProcess[str] | None:
 
 
 def kitty_state() -> object | None:
+    data = rc("ls", {})
+    if isinstance(data, str):
+        with suppress(json.JSONDecodeError):
+            return json.loads(data)
+
     result = run_kitten("ls")
     if result is None:
         return None
@@ -164,6 +306,21 @@ def kitty_state() -> object | None:
     except json.JSONDecodeError as exc:
         print(f"agents: failed to parse kitty state ({exc})", file=sys.stderr)
         return None
+
+
+def screen_text(window_id: int | str, *, ansi: bool) -> str | None:
+    """What is on one window's screen right now."""
+    data = rc("get-text", {"match": f"id:{window_id}", "extent": "screen", "ansi": ansi})
+    if isinstance(data, str):
+        return data
+
+    args = ["get-text", "--match", f"id:{window_id}", "--extent", "screen"]
+    if ansi:
+        args.append("--ansi")
+    result = run_kitten(*args)
+    if result is None or result.returncode != 0:
+        return None
+    return result.stdout
 
 
 def color(text: str, code: str, *, ansi: bool) -> str:

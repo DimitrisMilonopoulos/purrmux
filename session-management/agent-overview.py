@@ -38,6 +38,7 @@ from agents import (
     group_by_session,
     kitty_state,
     run_kitten,
+    screen_text,
     status_counts,
 )
 
@@ -148,17 +149,14 @@ def screen_of(window_id: str, *, ansi: bool) -> int:
         print(color(f"{where}{age}", "2;37", ansi=ansi))
         print(color("─" * 60, "2;37", ansi=ansi))
 
-    args = ["get-text", "--match", f"id:{window_id}", "--extent", "screen"]
-    if ansi:
-        args.append("--ansi")
-    result = run_kitten(*args)
-    if result is None or result.returncode != 0:
+    text = screen_text(window_id, ansi=ansi)
+    if text is None:
         print("(could not read this window)")
         return 0
 
     # kitty pads the screen out to its height; trailing blank rows would push
     # the interesting part out of view.
-    print("\n".join(result.stdout.rstrip("\n").splitlines()))
+    print("\n".join(text.rstrip("\n").splitlines()))
     return 0
 
 

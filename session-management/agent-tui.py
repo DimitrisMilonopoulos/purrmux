@@ -47,7 +47,11 @@ from textual.theme import Theme
 from textual.widget import Widget
 from textual.widgets import Button, Footer, Input, ListItem, ListView, Static
 
-REFRESH_SECONDS = 2.0
+# The list costs kitty 36ms to serialise however it is asked for, so it keeps
+# its old cadence; a screen over the held socket costs half a millisecond, so it
+# can be fetched often enough to read like a mirror rather than a snapshot.
+LIST_SECONDS = 2.0
+SCREEN_SECONDS = 0.4
 
 # Below this the list and the screen stop fitting beside each other, which is
 # every phone held upright.
@@ -562,6 +566,7 @@ class AgentTui(App[None]):
         self.wrap = True
         self.narrow = False
         self.list_width = LIST_WIDTH
+        self.shown: tuple[int, int, bool] | None = None
 
     def compose(self) -> ComposeResult:
         with Horizontal(id="header-bar"):
@@ -583,7 +588,8 @@ class AgentTui(App[None]):
         self.register_theme(purrmux_theme())
         self.theme = "purrmux"
         self.load_agents()
-        self.set_interval(REFRESH_SECONDS, self.tick)
+        self.set_interval(LIST_SECONDS, self.load_agents)
+        self.set_interval(SCREEN_SECONDS, self.tick_screen)
 
     def on_resize(self, event: Resize) -> None:
         self.narrow = event.size.width < NARROW_COLUMNS
@@ -606,10 +612,13 @@ class AgentTui(App[None]):
     # kitten @ round trips take long enough to stutter a refresh, so both of
     # them run in a worker and hand their results back.
 
-    def tick(self) -> None:
-        self.load_agents()
+    def tick_screen(self) -> None:
         if self.selected is not None and self.showing_detail:
             self.load_screen(self.selected)
+
+    def tick(self) -> None:
+        self.load_agents()
+        self.tick_screen()
 
     @work(thread=True, exclusive=True, group="agents")
     def load_agents(self) -> None:
@@ -618,15 +627,10 @@ class AgentTui(App[None]):
 
     @work(thread=True, exclusive=True, group="screen")
     def load_screen(self, window_id: int) -> None:
-        result = agent_state.run_kitten(
-            "get-text", "--match", f"id:{window_id}", "--extent", "screen", "--ansi"
-        )
-        if result is None or result.returncode != 0:
-            raw = "(could not read this window)"
-        else:
-            # kitty pads the screen out to its height; the blank rows would
-            # push what is happening off the top of a short screen.
-            raw = result.stdout.rstrip("\n")
+        text = agent_state.screen_text(window_id, ansi=True)
+        # kitty pads the screen out to its height; the blank rows would push
+        # what is happening off the top of a short screen.
+        raw = "(could not read this window)" if text is None else text.rstrip("\n")
         self.call_from_thread(self.show_screen, window_id, raw)
 
     @work(thread=True, group="send")
@@ -680,6 +684,12 @@ class AgentTui(App[None]):
     def show_screen(self, window_id: int, raw: str) -> None:
         if window_id != self.selected:
             return
+        # Two and a half frames a second, most of them identical: parsing and
+        # laying out an unchanged screen is the one cost worth avoiding here.
+        seen = (window_id, hash(raw), self.wrap)
+        if seen == self.shown:
+            return
+        self.shown = seen
         text = Text.from_ansi(raw)
         text.no_wrap = not self.wrap
         screen = self.query_one("#screen", Static)
@@ -700,6 +710,7 @@ class AgentTui(App[None]):
         self.query_one("#body").add_class("open")
         self.show_title()
         self.query_one("#screen", Static).update("…")
+        self.shown = None
         self.load_screen(self.selected)
 
     def on_list_view_highlighted(self, event: ListView.Highlighted) -> None:
