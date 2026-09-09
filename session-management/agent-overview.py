@@ -1,10 +1,11 @@
 #!/usr/bin/env python3
 """Overview of every agent running in kitty, grouped by session.
 
-Left: one row per agent — attention marker, status, agent, how long it has been
-in that state, branch, and the tab title (which is where Claude Code writes what
-it is currently doing). Right: that agent's actual screen, so the preview shows
-real progress rather than a summary of it.
+Left: two lines per agent — attention marker, status, agent, how long it has
+been in that state and the tab title (which is where Claude Code writes what it
+is currently doing), with the branch on its own line underneath so neither has
+to be cut short. Right: that agent's actual screen, so the preview shows real
+progress rather than a summary of it.
 
 The list refreshes itself: fzf listens on a local port and a ticker in this
 process posts reload actions to it, so statuses and ages stay current while the
@@ -43,6 +44,10 @@ from agents import (
 SCRIPT = str(Path(__file__).resolve())
 REFRESH_SECONDS = 2.0
 
+# fzf reads and reloads NUL-separated records, which is what lets a record hold
+# the newline that splits an agent across two lines.
+RECORD_SEPARATOR = "\0"
+
 FZF_UI_ARGS = [
     "--layout",
     "reverse",
@@ -64,23 +69,34 @@ FZF_UI_ARGS = [
     "inline-right",
     "--separator",
     "",
+    "--highlight-line",
     "--scrollbar",
     "▌",
 ]
 
 
-def row(agent: Agent, *, ansi: bool) -> str:
-    """One agent, as ``display \\t session \\t window id``.
-
-    Session rides along in its own field so filtering by it still matches rows
-    once the group header has been filtered away.
-    """
+def status_columns(agent: Agent, *, ansi: bool) -> str:
+    """The fixed-width columns an agent's first line opens with."""
     marker = color("!", "1;33", ansi=ansi) if agent.has_attention else " "
     status = color(f"{agent.dot} {agent.status:<8}", agent.status_color, ansi=ansi)
     name = color(f"{agent.agent:<9}", "1;36", ansi=ansi)
     age = color(f"{agent.age:>4}", "2;37", ansi=ansi)
-    branch = color(f"{agent.branch[:18]:<18}", "35", ansi=ansi)
-    display = f"  {marker} {status} {name} {age}  {branch} {agent.title}"
+    return f"  {marker} {status} {name} {age}  "
+
+
+def row(agent: Agent, *, ansi: bool) -> str:
+    """One agent, as ``display \\t session \\t window id``.
+
+    The display spans two lines: what the agent is doing, then its branch. The
+    session rides along in its own field so filtering by it still matches rows
+    once the group header has been filtered away.
+    """
+    display = f"{status_columns(agent, ansi=ansi)}{agent.title}"
+    if agent.branch:
+        # Indented by the same columns rendered without colour, so the branch
+        # sits under the title however wide the escapes above it happen to be.
+        indent = " " * len(status_columns(agent, ansi=False))
+        display += f"\n{indent}{color(agent.branch, '2;35', ansi=ansi)}"
     return f"{display}\t{agent.session}\t{agent.window_id}"
 
 
@@ -180,6 +196,7 @@ def run_picker(*, ansi: bool) -> int:
     fzf_command = [
         "fzf",
         *FZF_UI_ARGS,
+        "--read0",
         "--no-sort",
         "--expect",
         "enter,ctrl-x",
@@ -226,7 +243,7 @@ def run_picker(*, ansi: bool) -> int:
         refresh.start()
         proc = subprocess.run(
             fzf_command,
-            input="\n".join(lines),
+            input=RECORD_SEPARATOR.join(lines),
             stdout=subprocess.PIPE,
             text=True,
             env=env,
@@ -244,8 +261,9 @@ def run_picker(*, ansi: bool) -> int:
     if len(output) < 2:
         return 0
 
+    # The selection can be two lines long; its fields sit on the last of them.
     key = output[0].strip()
-    _, _, raw_window_id = output[1].rpartition("\t")
+    _, _, raw_window_id = output[-1].rpartition("\t")
     try:
         window_id = int(raw_window_id)
     except ValueError:
@@ -272,7 +290,7 @@ def main(argv: list[str]) -> int:
     if args.screen:
         return screen_of(args.screen, ansi=args.ansi)
     if args.list:
-        print("\n".join(list_lines(ansi=args.ansi)))
+        sys.stdout.write(RECORD_SEPARATOR.join(list_lines(ansi=args.ansi)))
         return 0
     return run_picker(ansi=args.ansi)
 
