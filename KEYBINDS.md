@@ -117,9 +117,32 @@ too. Use it when an app wants keys this config has taken.
 
 ## Outside kitty
 
-- Quake dropdown session picker — bind a compositor hotkey to
-  `kitten quick-access-terminal python3 ~/.config/kitty/session-management/kitty-zoxide-sessions.py --ansi --target=window --main-listen-on auto`
-  (see `quick-access-terminal.conf`). Works even when kitty isn't focused.
+Two quake dropdowns, bound in `hypr/binds.lua` to `bin/quake`. Each is a
+layer-shell panel anchored to the top edge, so it spans the monitor's full
+width — nothing is centred and nothing is truncated. Pressing the key again
+hides it.
+
+- `super+/` — session picker, the same one as `ctrl+g o k`
+- `super+o` — agent overview, the same one as `ctrl+g o o`
+
+Each quake is a kitty of its own, and that is what keeps the sidebar off them:
+the tab bar is an instance-wide option, so a window without one has to be an
+instance without one (`quake-kitty.conf`). A second kitty costs ~470ms to start,
+so `bin/quake` starts it once and keeps it alive with a hidden window that does
+nothing — only the first press after a reboot waits.
+
+The panel itself is not kept. Each press closes whatever is open and creates a
+new one, and the picker exiting takes its panel with it, because the panel *is*
+that window. Nothing tracks whether a quake is currently on screen, which is
+deliberate: versions that hid and re-showed one long-lived panel were all flaky
+in the same way, since the hotkey, `hide_on_focus_loss` and the compositor each
+changed that state without telling the others. Dismiss with esc.
+
+Both drive the main instance over remote control — `--main-listen-on auto` — so
+the session picker opens sessions there and the overview has agents to read.
+See `quake-sessions.conf`, `quake-agents.conf` and the slim `quake-kitty.conf`
+they share.
+
 - macOS has no compositor hotkey for that. kitty registers a "Quick access to
   kitty" entry under System Settings → Keyboard → Keyboard Shortcuts → Services
   → General once you've run `kitten quick-access-terminal` by hand, or a

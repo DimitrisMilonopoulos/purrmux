@@ -35,11 +35,13 @@ from agents import (
     clear_attention,
     collect_agents,
     color,
+    discover_control_address,
     group_by_session,
     kitty_state,
     run_kitten,
     screen_text,
     status_counts,
+    use_control_address,
 )
 
 SCRIPT = str(Path(__file__).resolve())
@@ -160,6 +162,17 @@ def screen_of(window_id: str, *, ansi: bool) -> int:
     return 0
 
 
+def resolve_main_listen_on(value: str | None) -> str:
+    """Turn the --main-listen-on value into a socket address.
+
+    ``auto`` asks agents.py to find a kitty that answers. The quake has no
+    control socket of its own, so the instance it finds is the main one.
+    """
+    if not value:
+        return ""
+    return discover_control_address() if value == "auto" else value
+
+
 def free_port() -> int:
     with socket.socket() as sock:
         sock.bind(("127.0.0.1", 0))
@@ -180,10 +193,16 @@ def ticker(port: int, action: str, done: threading.Event) -> None:
         post_action(port, action)
 
 
-def run_picker(*, ansi: bool) -> int:
+def run_picker(*, ansi: bool, hold_on_empty: bool = False) -> int:
     lines = list_lines(ansi=ansi)
     if not lines:
         print("No agents running")
+        # In the quake the overview *is* the window, so returning here would
+        # flash it open and shut with nothing readable in between.
+        if hold_on_empty:
+            print("\nPress enter to close.", end="", flush=True)
+            with contextlib.suppress(EOFError, KeyboardInterrupt):
+                input()
         return 0
 
     quoted = shlex.quote(SCRIPT)
@@ -280,7 +299,30 @@ def main(argv: list[str]) -> int:
     parser.add_argument("--list", action="store_true", help="Print the fzf input and exit")
     parser.add_argument("--screen", metavar="WINDOW_ID", help="Print one agent's screen and exit")
     parser.add_argument("--header", action="store_true", help="Print the header line and exit")
+    parser.add_argument(
+        "--main-listen-on",
+        default=None,
+        help=(
+            "Remote-control socket of the kitty instance to read (e.g. "
+            "'unix:@kitty-1234'), or 'auto' to discover one. Needed wherever "
+            "the ambient socket isn't the instance you mean: over ssh, or in "
+            "the quake, whose window belongs to kitty but is handed the address "
+            "outright by bin/quake so it never has to discover one."
+        ),
+    )
+    parser.add_argument(
+        "--hold-on-empty",
+        action="store_true",
+        help="With no agents to show, wait for enter instead of exiting at once",
+    )
     args = parser.parse_args(argv[1:])
+
+    if address := resolve_main_listen_on(args.main_listen_on):
+        use_control_address(address)
+        # fzf's preview and reload commands are grandchildren of this process and
+        # parse no arguments of their own; the environment is how they inherit
+        # the instance we settled on.
+        os.environ["KITTY_LISTEN_ON"] = address
 
     if args.header:
         print(header_line())
@@ -290,7 +332,7 @@ def main(argv: list[str]) -> int:
     if args.list:
         sys.stdout.write(RECORD_SEPARATOR.join(list_lines(ansi=args.ansi)))
         return 0
-    return run_picker(ansi=args.ansi)
+    return run_picker(ansi=args.ansi, hold_on_empty=args.hold_on_empty)
 
 
 if __name__ == "__main__":

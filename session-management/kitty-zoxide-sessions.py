@@ -94,7 +94,12 @@ def discover_main_listen_on(self_pid: int | None) -> str | None:
     socket has to be resolved explicitly rather than using the ambient
     ``$KITTY_LISTEN_ON`` (which points at the dropdown).
     """
-    candidates: list[tuple[int, str]] = []
+    # Keyed by pid, because a socket is named once but listed more than once:
+    # /proc/net/unix has a line for the listening socket and another for every
+    # client connected to it, all carrying the same name. Collecting them into a
+    # list made one instance with an open connection look like several, and the
+    # picker said so every time it started.
+    candidates: dict[int, str] = {}
 
     # Linux: abstract sockets show up in /proc/net/unix as ``@kitty-<pid>``.
     try:
@@ -103,7 +108,7 @@ def discover_main_listen_on(self_pid: int | None) -> str | None:
                 name = line.rstrip("\n").rsplit(" ", 1)[-1]
                 match = re.fullmatch(r"@kitty-(\d+)", name)
                 if match:
-                    candidates.append((int(match.group(1)), f"unix:{name}"))
+                    candidates[int(match.group(1))] = f"unix:{name}"
     except OSError:
         pass
 
@@ -112,10 +117,10 @@ def discover_main_listen_on(self_pid: int | None) -> str | None:
         for path in glob.glob("/tmp/mykitty-*"):
             match = re.fullmatch(r".*/mykitty-(\d+)", path)
             if match:
-                candidates.append((int(match.group(1)), f"unix:{path}"))
+                candidates[int(match.group(1))] = f"unix:{path}"
 
-    others = [addr for pid, addr in candidates if pid != self_pid]
-    pool = others or [addr for _, addr in candidates]
+    others = [addr for pid, addr in candidates.items() if pid != self_pid]
+    pool = others or list(candidates.values())
 
     if not pool:
         return None

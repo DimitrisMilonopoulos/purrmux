@@ -1,0 +1,98 @@
+#!/bin/sh
+# Open a quake dropdown. Bound to SUPER+slash and SUPER+O.
+#
+# Two facts set the shape of this.
+#
+# A quake has to be its own kitty, because the tab bar is read from
+# instance-wide options for every OS window kitty lays out, with nothing
+# per-window to set (see tab_bar/toggle-edge.py). A window with no sidebar has
+# to be an instance with no sidebar — quake-kitty.conf.
+#
+# And a kitty costs ~470ms to start: fonts, GL context, layer-shell handshake.
+# Paying that per press is what made the old dropdown feel slow.
+#
+# So the instance is started once and kept alive by a hidden window that does
+# nothing, and each press asks it for a *new* panel. The panel is created, not
+# revealed — which is the whole point. Earlier versions kept one panel and
+# hid it between presses, and every one of them was flaky for the same reason:
+# whether the panel is currently on screen is state, and the hotkey,
+# hide_on_focus_loss and the compositor all change it without telling each
+# other, so they race. Nothing here asks whether the panel is up. A press
+# closes whatever is there and opens a fresh one; the picker exiting takes its
+# panel with it, because the panel is that window. Dismiss with esc.
+set -eu
+
+name=${1:-}
+kittyconf=$HOME/.config/kitty/quake-kitty.conf
+helpers=$HOME/.config/kitty/session-management
+sock=unix:@kitty-quake-$name
+
+# The main instance's control socket, read straight out of /proc rather than
+# discovered: os-linux.conf names it after the pid, and a quake's own socket is
+# named rather than numbered so it can't be mistaken for one. Handing the
+# address to the picker saves it ~130ms of shelling out to find it.
+main=$(grep -o '@kitty-[0-9]\+' /proc/net/unix | sort -u | head -1)
+[ -n "$main" ] && main="unix:$main" || main=auto
+
+case $name in
+    sessions)
+        lines=30
+        picker="python3 $helpers/kitty-zoxide-sessions.py --ansi --target=window"
+        ;;
+    agents)
+        # Two lines per agent and 55% of the width given to a live preview of
+        # its screen, so it wants more room than the session list.
+        lines=38
+        picker="python3 $helpers/agent-overview.py --ansi --hold-on-empty"
+        ;;
+    *)
+        echo "usage: quake {sessions|agents}" >&2
+        exit 2
+        ;;
+esac
+
+running() { grep -q "@kitty-quake-$name\$" /proc/net/unix; }
+
+if ! running; then
+    # The holder. It is hidden and runs nothing, and exists only so the
+    # instance outlives the panels: a kitty with no OS windows left exits, and
+    # a panel that closes with its picker would take the instance with it.
+    kitty --config "$kittyconf" \
+          --listen-on "$sock" \
+          --override allow_remote_control=yes \
+          --class "kitty-quake-$name-holder" \
+          --start-as hidden \
+          sh -c 'while :; do sleep 86400; done' </dev/null >/dev/null 2>&1 &
+
+    waited=0
+    while ! running; do
+        waited=$((waited + 1))
+        if [ "$waited" -gt 200 ]; then
+            echo "quake: the $name instance did not come up" >&2
+            exit 1
+        fi
+        sleep 0.05
+    done
+fi
+
+# Out with the old — a no-op when nothing is open, which is the usual case.
+kitten @ --to "$sock" close-window --match "var:quake=$name" >/dev/null 2>&1 || true
+
+# In with the new. layer=overlay because these settings are parsed against the
+# panel kitten, whose layer defaults to `bottom` — below every ordinary window,
+# which on a tiled desktop means an invisible dropdown. exclusive-zone=0 with
+# override says "claim nothing, respect what the bar claimed", which puts the
+# panel under the bar rather than over it. hide-on-focus-loss is what gets the
+# panel the keyboard when it opens, and — by forcing focus_policy to on-demand
+# rather than the layer shell's exclusive — what lets go of the keyboard again,
+# so the session you just opened can actually be typed into.
+exec kitten @ --to "$sock" launch --type=os-panel \
+    --os-panel "lines=$lines" \
+    --os-panel edge=top \
+    --os-panel layer=overlay \
+    --os-panel exclusive-zone=0 \
+    --os-panel override-exclusive-zone=yes \
+    --os-panel hide-on-focus-loss=yes \
+    --os-window-class "kitty-quake-$name" \
+    --var "quake=$name" \
+    $picker --main-listen-on "$main"
