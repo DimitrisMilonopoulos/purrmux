@@ -117,16 +117,17 @@ too. Use it when an app wants keys this config has taken.
 
 ## Outside kitty
 
-Two quake dropdowns, bound in `hypr/binds.lua` to `bin/quake`. Each is a
+- `super+/` — session picker, the same one as `ctrl+g o k`
+- `super+o` — the agent deck: every agent running in kitty, with a live mirror
+  of the selected one's screen
+
+`super+/` is a quake dropdown, bound in `hypr/binds.lua` to `bin/quake`: a
 layer-shell panel anchored to the top edge, so it spans the monitor's full
 width — nothing is centred and nothing is truncated. Pressing the key again
 hides it.
 
-- `super+/` — session picker, the same one as `ctrl+g o k`
-- `super+o` — agent overview, the same one as `ctrl+g o o`
-
-Each quake is a kitty of its own, and that is what keeps the sidebar off them:
-the tab bar is an instance-wide option, so a window without one has to be an
+The quake is a kitty of its own, and that is what keeps the sidebar off it: the
+tab bar is an instance-wide option, so a window without one has to be an
 instance without one (`quake-kitty.conf`). A second kitty costs ~470ms to start,
 so `bin/quake` starts it once and keeps it alive with a hidden window that does
 nothing — only the first press after a reboot waits.
@@ -138,10 +139,15 @@ deliberate: versions that hid and re-showed one long-lived panel were all flaky
 in the same way, since the hotkey, `hide_on_focus_loss` and the compositor each
 changed that state without telling the others. Dismiss with esc.
 
-Both drive the main instance over remote control — `--main-listen-on auto` — so
-the session picker opens sessions there and the overview has agents to read.
-See `quake-sessions.conf`, `quake-agents.conf` and the slim `quake-kitty.conf`
-they share.
+It drives the main instance over remote control — `--main-listen-on auto` — so
+the sessions it opens land there rather than in the dropdown.
+
+`super+o` was a quake too, and is now an ignis popup
+(`ignis/modules/agent_deck`), because it wanted two things a second kitty could
+not give it: to be reachable from a workspace with no kitty on it, and to leave
+a badge in the bar when an agent starts waiting on you. It reads the same state
+through the same `session-management/agents.py`, so it and `ctrl+g o o` can
+never disagree about what is running.
 
 - macOS has no compositor hotkey for that. kitty registers a "Quick access to
   kitty" entry under System Settings → Keyboard → Keyboard Shortcuts → Services

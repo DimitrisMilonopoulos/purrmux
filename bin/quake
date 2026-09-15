@@ -1,5 +1,11 @@
 #!/bin/sh
-# Open a quake dropdown. Bound to SUPER+slash and SUPER+O.
+# Open the session-picker quake dropdown. Bound to SUPER+slash.
+#
+# This took the agent overview too, until that moved into the shell as an ignis
+# popup (ignis/modules/agent_deck, SUPER+O). The overview wanted to be reachable
+# from a workspace with no kitty on it, and to leave a badge in the bar — neither
+# of which a second kitty can do. The machinery below is still shaped for more
+# than one quake, because it costs nothing and the next one will want it.
 #
 # Two facts set the shape of this.
 #
@@ -39,14 +45,8 @@ case $name in
         lines=30
         picker="python3 $helpers/kitty-zoxide-sessions.py --ansi --target=window"
         ;;
-    agents)
-        # Two lines per agent and 55% of the width given to a live preview of
-        # its screen, so it wants more room than the session list.
-        lines=38
-        picker="python3 $helpers/agent-overview.py --ansi --hold-on-empty"
-        ;;
     *)
-        echo "usage: quake {sessions|agents}" >&2
+        echo "usage: quake sessions" >&2
         exit 2
         ;;
 esac
