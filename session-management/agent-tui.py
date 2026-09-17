@@ -25,16 +25,14 @@ from __future__ import annotations
 import argparse
 import os
 import shutil
-import subprocess
 import sys
-from contextlib import suppress
 from pathlib import Path
 from typing import ClassVar
 
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 
 import agents as agent_state
-from agents import Agent
+from agents import Agent, read_lines, worktrees
 from rich.text import Text
 from textual import work
 from textual.app import App, ComposeResult
@@ -209,38 +207,6 @@ def title_text(agent: Agent) -> Text:
     return title
 
 
-def read_lines(*command: str) -> list[str]:
-    """Lines of a command's output, or nothing at all if it can't be run."""
-    try:
-        result = subprocess.run(
-            command,
-            check=False,
-            stdout=subprocess.PIPE,
-            stderr=subprocess.DEVNULL,
-            text=True,
-            timeout=5,
-        )
-    except (FileNotFoundError, subprocess.TimeoutExpired):
-        return []
-    return result.stdout.splitlines() if result.returncode == 0 else []
-
-
-def agent_program(name: str) -> list[str]:
-    """How to start an agent from a process that is not a login shell.
-
-    launch runs the program itself, with kitty's environment — and kitty was
-    started by the desktop session, whose PATH is /usr/local/bin:/usr/bin. No
-    ~/.local/bin, no version manager shims, so `claude` is simply not found.
-    Resolving it here, where the login PATH applies, fixes the common case;
-    anything still unfound goes through a login shell, which is how you would
-    have started it by hand.
-    """
-    found = shutil.which(name)
-    if found:
-        return [found]
-    return [os.environ.get("SHELL", "/bin/sh"), "-l", "-c", name]
-
-
 def available_agents() -> list[tuple[str, str]]:
     """``(name, where it was found)``, so a surprise is visible before launch."""
     found = [(name, shutil.which(name) or "") for name in AGENT_COMMANDS]
@@ -265,29 +231,6 @@ def candidate_directories(running: list[Agent]) -> list[str]:
         if line:
             seen.setdefault(line, None)
     return list(seen)
-
-
-def worktrees(directory: str) -> list[tuple[str, str]]:
-    """``(path, branch)`` for every worktree of the repo at ``directory``.
-
-    zoxide only knows the directories you have actually been in, so a worktree
-    made on the machine and never visited is invisible to it. git isn't.
-    """
-    entries: list[tuple[str, str]] = []
-    path = branch = ""
-    for line in read_lines("git", "-C", directory, "worktree", "list", "--porcelain"):
-        if line.startswith("worktree "):
-            if path:
-                entries.append((path, branch))
-                branch = ""
-            path = line.removeprefix("worktree ")
-        elif line.startswith("branch "):
-            branch = line.removeprefix("branch ").removeprefix("refs/heads/")
-        elif line.startswith("detached"):
-            branch = "detached"
-    if path:
-        entries.append((path, branch))
-    return entries
 
 
 def short_path(path: str) -> str:
@@ -440,34 +383,16 @@ class SpawnScreen(ModalScreen[int | None]):
         """Put the agent where its session already lives, or in a window of its own.
 
         The session is the folder's name, which is what kitty-zoxide-sessions.py
-        names sessions after — set as a user var so the sidebar, the overview
-        and this list all group the new tab with its siblings.
+        names sessions after — agents.spawn() sets it as a user var so the
+        sidebar, the overview and this list all group the new tab with its
+        siblings. No prompt and no tab title: you are about to look at the
+        window anyway, and the agent's own title — which is what it writes what
+        it is doing into — is worth more there than the word "claude".
         """
         session = Path(self.directory).name
-        sibling = next((a for a in self.running if a.session == session), None)
-        args = [
-            "launch",
-            "--type",
-            "tab" if sibling else "os-window",
-            "--cwd",
-            self.directory,
-            "--tab-title",
-            command,
-            "--var",
-            f"kitty_zoxide_session={session}",
-        ]
-        if sibling:
-            args += ["--match", f"id:{sibling.window_id}"]
-        # --hold runs a shell once the agent exits, so quitting it leaves the
-        # tab standing rather than taking the window with it.
-        args += ["--hold", *agent_program(command)]
-
-        result = agent_state.run_kitten(*args)
-        window_id = None
-        if result is not None and result.returncode == 0:
-            with suppress(ValueError):
-                window_id = int(result.stdout.strip())
-        self.dismiss(window_id)
+        self.dismiss(
+            agent_state.spawn(command, cwd=self.directory, session=session)
+        )
 
     def action_cancel(self) -> None:
         self.dismiss(None)

@@ -1,0 +1,27 @@
+#!/bin/sh
+# Spawn and drive the agents running in kitty.
+#
+#   kitty-agent list                     what is running
+#   kitty-agent spawn --prompt '…'       start one, optionally in a new worktree
+#   kitty-agent screen <id>              what it is showing
+#   kitty-agent send <id> '1'            answer a prompt it is blocked on
+#   kitty-agent wait <id>                block until it stops working
+#   kitty-agent mcp                      the same verbs as MCP tools, over stdio
+#
+# One name on PATH and one name in an MCP config, because `mcp` being a
+# subcommand rather than a second binary is what makes
+#   claude mcp add kitty-agents -- ~/.config/kitty/bin/kitty-agent mcp
+# read like a sentence. The logic lives in session-management/, under names
+# python can actually import — which a hyphenated one is not.
+set -eu
+
+# Derived from this script's own location rather than $KITTY_CONFIG_DIR, which
+# kitty does not export to launched programs.
+dir=$(CDPATH='' cd -- "$(dirname -- "$0")/.." && pwd)/session-management
+
+if [ "${1:-}" = 'mcp' ]; then
+    shift
+    exec python3 "$dir/agent_mcp.py" "$@"
+fi
+
+exec python3 "$dir/agentctl.py" "$@"

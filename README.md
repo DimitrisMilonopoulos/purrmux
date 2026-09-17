@@ -27,6 +27,7 @@ In pane mode `h/j/k/l` focus and `H/J/K/L` move — kitty parses a bare `H` iden
 - [Vertical tab bar (sidebar)](#vertical-tab-bar-sidebar)
 - [Agent attention hooks](#agent-attention-hooks)
 - [Agents from your phone](#agents-from-your-phone)
+- [Agents that start agents](#agents-that-start-agents)
 - [Security note](#security-note)
 
 ## Prerequisites
@@ -245,6 +246,48 @@ The user var is what makes the new tab group with its session everywhere else �
 
 Unlike the other scripts it is not launched by kitty, so there is no control socket to inherit: it finds a running instance from `pgrep kitty` and the pid-named socket `os-linux.conf`/`os-macos.conf` ask for, or takes one as `--to unix:@kitty-1234`. Reaching the machine is ssh's problem — Tailscale, a jump host, whatever you already use. Nothing here opens a port.
 
+## Agents that start agents
+
+The hooks above let an agent tell you what it is doing. `bin/kitty-agent` is the other direction: it lets one agent start another, and watch it. Put `bin/` on your `PATH` — `fish_add_path $HOME/.config/kitty/bin`, or the equivalent — and `quake` and `kitty-run` come along with it.
+
+```sh
+kitty-agent list                                  # what is running, waiting-on-you first
+kitty-agent spawn --prompt 'fix the flaky test'   # a new agent, here
+kitty-agent spawn --repo ~/src/app --worktree dark-mode --prompt 'add the dark mode toggle'
+kitty-agent screen 42                             # what it said, scrollback included
+kitty-agent send 42 '1'                           # answer a permission prompt
+kitty-agent wait 42                               # block until it stops working
+kitty-agent worktrees --repo ~/src/app
+```
+
+`spawn` is `agent-tui.py`'s `n` key with no UI in front of it, so it lands in the same place: a tab beside an agent already running for that session, an OS window of its own when there is none.
+
+It joins that session twice over, because there are two of them. `kitty_zoxide_session` is the name the picker gives a session and what the sidebar, the overview and the deck group by; kitty keeps its own membership per window, and that is what `tab_bar_filter` and the tab navigation actions go by. kitty only hands a new window its source window's session when the cwd comes from that window too, and `spawn`'s never does — so without asking, a spawned window would belong to no session at all. Which is not merely untidy: this config filters the bar on `session:~ or session:^$`, so a session-less tab shows up in *every* OS window's sidebar at once and `next_tab` reaches it from all of them. So `spawn` passes `--add-to-session` by name, preferring whatever kitty already calls the session it is joining. It does not take your focus, and it does not pin a tab title — Claude Code writes what it is currently doing into the window title, and that is worth more than the word `claude` sitting there forever.
+
+`--worktree NAME` uses that worktree of the repo, and makes it if it isn't there. Both conventions are read off the repo rather than configured: the directory is wherever that repo's existing external worktrees live (worktrees *inside* the repo are ignored — Claude Code keeps dozens under `.claude/worktrees` and outnumbering the real ones is not the same as being them), and the branch is the repo's own prefix plus the name, so a repo whose branches look like `feature/…` gets `feature/dark-mode`. Nothing here removes a worktree or deletes a branch; that stays a thing you do on purpose.
+
+`screen` reads the scrollback, not just the visible rows, and that is the default rather than a flag: Claude Code collapses its transcript when it finishes, so by the time anything notices an agent is done, what it *said* has already scrolled off the screen it said it on. `--screen-only` gets the bare screen back, which is what the overview's preview pane wants and nothing else does.
+
+A prompt arrives already submitted. All three agents take one on the command line — `claude` and `codex` positionally, `opencode` as `--prompt` — and anything else is waited for and typed in, as one bracketed paste so a multi-line prompt isn't submitted a line at a time.
+
+**Agent windows only.** Every command that names a window refuses one that isn't an agent's — no `agent_name`, no `agent_status`, and not opened by `spawn` — and refuses the window it is itself running in. Your shells, editors and lazygit tabs are out of reach, and an agent cannot type into itself. A spawned window carries those user vars from birth, set at `launch` before the child execs, so nothing races the first hook.
+
+### As MCP tools
+
+```sh
+~/.config/kitty/hooks/install-agent-mcp.sh
+```
+
+Registers `bin/kitty-agent mcp` as an MCP server called `kitty-agents` with whichever of `claude`, `codex` and `opencode` are on your `PATH`, through each one's own `mcp add`. That is deliberate: `~/.claude.json` holds live session state a running Claude Code rewrites underneath you, `~/.codex/config.toml` holds the hook-trust hashes and stdlib `tomllib` cannot write TOML back, and `opencode.jsonc` has comments that a JSON round trip would eat — each agent's own CLI is the only writer that knows how to keep its own file. OpenCode's `mcp add` is interactive, so the installer prints the snippet to paste instead. Safe to rerun; restart the agent afterwards.
+
+The eight tools are the commands above: `spawn_agent`, `list_agents`, `read_agent_screen`, `send_to_agent`, `wait_for_agent`, `focus_agent`, `close_agent`, `list_worktrees`. `wait_for_agent` returns `timed_out: true` rather than failing, because the caller's tool call is blocked for the whole of it and two calls beat one that looks hung.
+
+The server is ~200 lines of JSON-RPC over stdio with no dependency, for the same reason `agents.py` hand-rolls kitty's control protocol: it is four methods and a table of schemas, and the alternative is a dependency resolve on the startup path of every agent session on the machine. Requests are handled on threads, so a long `wait_for_agent` doesn't stall a `tools/list`, and stdout is taken away from the rest of the process on the first line of `serve()` — a stray `print` between two JSON objects is the one thing that reliably kills a server like this.
+
+A spawned agent is a peer, not a subprocess. `--copy-env` hands it the parent window's environment, because kitty's own `PATH` is the desktop session's and the agent's subprocesses need the login one — but the variables that say *you are inside this agent's session* are stripped on the way through. Claude Code reads `CLAUDE_CODE_CHILD_SESSION` and quietly stops saving the new session's transcript otherwise, and both ends up sharing one messaging socket.
+
 ## Security note
 
 `allow_remote_control yes` with `listen_on` is required by the session/pane/tool scripts (they call `kitten @ ls`, `focus-window`, etc.). The socket is per-user (local-only, not network-exposed), but any process running as your user can drive kitty — running commands and reading pane contents. If that's not acceptable for your threat model, set `allow_remote_control no` in `override.conf` and expect the session picker, pane picker, and lazygit/lazydocker launchers to stop working.
+
+`kitty-agent` and its MCP server are that same socket with a smaller opening: they refuse every window that is not an agent's, and they add no network surface of their own. What they do change is *who* reaches for it — an agent you have given the tools to can now open windows, run agents in them, and type into other agents, without asking first. That is the point of it, and it is worth knowing before you install it. Don't install the MCP server if you would not also hand that agent a shell.

@@ -12,6 +12,7 @@ from __future__ import annotations
 import json
 import os
 import re
+import shutil
 import socket
 import subprocess
 import sys
@@ -32,9 +33,55 @@ STATUS_COLORS = {
     "working": "1;33",
     "done": "1;34",
 }
-STATUS_ORDER = ("blocked", "error", "waiting", "done", "working", "running", "idle")
+STATUS_ORDER = (
+    "blocked",
+    "error",
+    "waiting",
+    "done",
+    "working",
+    "starting",
+    "running",
+    "idle",
+)
 STATUS_DOTS = {"idle": "○"}
 STATUS_DOT = "●"
+
+# Stamped on every window spawn() opens, and the only thing that says "agent"
+# about a window between kitty creating it and the agent's first hook firing.
+# Its value is the window that asked for it, or "cli" when nothing did.
+SPAWN_VAR = "agent_spawned_by"
+
+# How each agent takes a prompt on its command line. An agent that arrives
+# already asked is the difference between spawning a worker and spawning a
+# blank window someone has to notice. Anything not listed here is typed at
+# instead — see send_prompt().
+PROMPT_ARGV = {
+    "claude": lambda prompt: [prompt],
+    "codex": lambda prompt: [prompt],
+    "opencode": lambda prompt: ["--prompt", prompt],
+}
+
+# What spawn() reports until the agent's own hook says otherwise.
+STATUS_STARTING = "starting"
+
+# The parent window's environment is copied for its PATH, not for its identity.
+# These say "you are inside this agent's session", and an agent that inherits
+# them is not a peer of the one that started it: Claude Code reads the child
+# marker and quietly stops saving the new session's transcript, and both ends
+# up sharing one messaging socket. Stripped so a spawned agent looks exactly
+# like one started from a shell.
+INHERITED_SESSION_ENV = (
+    "CLAUDECODE",
+    "CLAUDE_CODE_CHILD_SESSION",
+    "CLAUDE_CODE_SESSION_ID",
+    "CLAUDE_CODE_SESSION_ATTENDED",
+    "CLAUDE_CODE_ENTRYPOINT",
+    "CLAUDE_CODE_EXECPATH",
+    "CLAUDE_CODE_MESSAGING_SOCKET",
+    "CLAUDE_CODE_MESSAGING_TOKEN",
+    "CLAUDE_PID",
+    "CLAUDE_EFFORT",
+)
 
 _branch_cache: dict[str, str] = {}
 
@@ -274,11 +321,14 @@ def discover_control_address() -> str:
     return ""
 
 
-def run_kitten(*args: str) -> subprocess.CompletedProcess[str] | None:
+def run_kitten(
+    *args: str, stdin: str | None = None
+) -> subprocess.CompletedProcess[str] | None:
     try:
         return subprocess.run(
             ["kitten", "@", *address_args(), *args],
             check=False,
+            input=stdin,
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             text=True,
@@ -308,13 +358,22 @@ def kitty_state() -> object | None:
         return None
 
 
-def screen_text(window_id: int | str, *, ansi: bool) -> str | None:
-    """What is on one window's screen right now."""
-    data = rc("get-text", {"match": f"id:{window_id}", "extent": "screen", "ansi": ansi})
+def screen_text(
+    window_id: int | str, *, ansi: bool, extent: str = "screen"
+) -> str | None:
+    """What one window is showing.
+
+    ``screen`` is the visible rows, which is what a live preview wants — a
+    mirror of the window, nothing more. ``all`` adds the scrollback, which is
+    where an agent's answer goes: Claude Code collapses its transcript when it
+    finishes, so by the time something notices the agent is done, what it said
+    has already scrolled off the screen it said it on.
+    """
+    data = rc("get-text", {"match": f"id:{window_id}", "extent": extent, "ansi": ansi})
     if isinstance(data, str):
         return data
 
-    args = ["get-text", "--match", f"id:{window_id}", "--extent", "screen"]
+    args = ["get-text", "--match", f"id:{window_id}", "--extent", extent]
     if ansi:
         args.append("--ansi")
     result = run_kitten(*args)
@@ -464,6 +523,10 @@ def collect_agents(data: object, *, attention_only: bool = False) -> list[Agent]
 
                 status = clean_text(user_vars.get("agent_status"))
                 agent = clean_text(user_vars.get("agent_name"))
+                # A window we started has run no hook yet, so it has neither;
+                # it is still an agent, and listing it is how the process that
+                # asked for it can find it again a moment later.
+                spawned = bool(user_vars.get(SPAWN_VAR))
                 is_focused = (
                     os_focused and tab_focused and bool(window.get("is_focused"))
                 )
@@ -472,7 +535,9 @@ def collect_agents(data: object, *, attention_only: bool = False) -> list[Agent]
                     user_vars.get("agent_attention") == "1" and not is_focused
                 )
 
-                if not has_attention and (attention_only or not (status or agent)):
+                if not has_attention and (
+                    attention_only or not (status or agent or spawned)
+                ):
                     continue
 
                 window_id = window.get("id")
@@ -543,3 +608,316 @@ def clear_attention(window_id: int) -> int:
     if result is None:
         return 1
     return result.returncode
+
+
+# --- driving agents, not just watching them ---------------------------------
+#
+# Everything above reads. What follows acts: it opens agent windows, types into
+# them and closes them. It was written for the phone TUI's "new agent" screen
+# and lifted here when agentctl.py and the MCP server wanted the same verbs, so
+# that a human pressing `n` and an agent calling a tool go down one path.
+
+
+def read_lines(*command: str) -> list[str]:
+    """Lines of a command's output, or nothing at all if it can't be run."""
+    try:
+        result = subprocess.run(
+            command,
+            check=False,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.DEVNULL,
+            text=True,
+            timeout=5,
+        )
+    except (FileNotFoundError, subprocess.TimeoutExpired):
+        return []
+    return result.stdout.splitlines() if result.returncode == 0 else []
+
+
+def agent_program(name: str) -> list[str]:
+    """How to start an agent from a process that is not a login shell.
+
+    launch runs the program itself, with kitty's environment — and kitty was
+    started by the desktop session, whose PATH is /usr/local/bin:/usr/bin. No
+    ~/.local/bin, no version manager shims, so `claude` is simply not found.
+    Resolving it here, where the login PATH applies, fixes the common case;
+    anything still unfound goes through a login shell, which is how you would
+    have started it by hand.
+    """
+    found = shutil.which(name)
+    if found:
+        return [found]
+    return [os.environ.get("SHELL", "/bin/sh"), "-l", "-c", name]
+
+
+def agent_argv(name: str, prompt: str | None = None) -> tuple[list[str], str | None]:
+    """What to exec, and whatever prompt the argv could not carry.
+
+    All three agents take a prompt on the command line, but not in the same
+    shape: claude and codex take it positionally, opencode's positional is a
+    project directory so its prompt is a flag. Anything unrecognised — or the
+    login-shell fallback below, where a shell reads the line before the agent
+    does — hands the prompt back to be typed in instead.
+    """
+    program = agent_program(name)
+    carry = PROMPT_ARGV.get(name)
+    if not prompt or carry is None or len(program) > 1:
+        return program, prompt
+    return [*program, *carry(prompt)], None
+
+
+def worktrees(directory: str) -> list[tuple[str, str]]:
+    """``(path, branch)`` for every worktree of the repo at ``directory``.
+
+    zoxide only knows the directories you have actually been in, so a worktree
+    made on the machine and never visited is invisible to it. git isn't.
+    """
+    entries: list[tuple[str, str]] = []
+    path = ""
+    branch = ""
+    for line in read_lines("git", "-C", directory, "worktree", "list", "--porcelain"):
+        if line.startswith("worktree "):
+            path = line.removeprefix("worktree ")
+            branch = ""
+        elif line.startswith("branch "):
+            branch = line.removeprefix("branch ").removeprefix("refs/heads/")
+        elif line.startswith("detached"):
+            branch = "detached"
+        elif not line and path:
+            entries.append((path, branch))
+            path = ""
+    if path:
+        entries.append((path, branch))
+    return entries
+
+
+def is_agent_window(window: object) -> bool:
+    """Whether a window from ``kitten @ ls`` is an agent's.
+
+    The guard everything that acts goes through. A window that never reported a
+    status, never named an agent and was not opened by spawn() is somebody's
+    shell, editor or lazygit, and nothing here has any business typing into it.
+    """
+    if not isinstance(window, dict):
+        return False
+    user_vars = window.get("user_vars")
+    if not isinstance(user_vars, dict):
+        return False
+    return bool(
+        user_vars.get("agent_name")
+        or user_vars.get("agent_status")
+        or user_vars.get(SPAWN_VAR)
+    )
+
+
+def find_window(data: object, window_id: int) -> dict | None:
+    """One window out of a ``kitten @ ls`` tree, by id."""
+    if not isinstance(data, list):
+        return None
+    for os_window in data:
+        if not isinstance(os_window, dict):
+            continue
+        for tab in os_window.get("tabs") or []:
+            if not isinstance(tab, dict):
+                continue
+            for window in tab.get("windows") or []:
+                if isinstance(window, dict) and window.get("id") == window_id:
+                    return window
+    return None
+
+
+def send_text(window_id: int, text: str) -> int:
+    """Type into a window, exactly as given.
+
+    --stdin sends the text as is rather than reading kitty's python escapes, so
+    a backslash someone typed stays a backslash. Bracketed paste is what stops
+    a multi-line prompt from being submitted a line at a time by a TUI that
+    treats every newline as enter.
+    """
+    result = run_kitten(
+        "send-text",
+        "--match",
+        f"id:{window_id}",
+        "--stdin",
+        "--bracketed-paste=enable",
+        stdin=text,
+    )
+    return 1 if result is None else result.returncode
+
+
+def send_key(window_id: int, *keys: str) -> int:
+    result = run_kitten("send-key", "--match", f"id:{window_id}", *keys)
+    return 1 if result is None else result.returncode
+
+
+def focus_window(window_id: int) -> int:
+    result = run_kitten("focus-window", "--match", f"id:{window_id}")
+    return 1 if result is None else result.returncode
+
+
+def close_window(window_id: int) -> int:
+    result = run_kitten("close-window", "--match", f"id:{window_id}")
+    return 1 if result is None else result.returncode
+
+
+# How long a freshly launched agent gets to draw something before a prompt is
+# typed at it. Whatever it has painted is enough: the alternative is racing its
+# first frame and losing the first few characters.
+PROMPT_READY_SECONDS = 8.0
+PROMPT_POLL_SECONDS = 0.25
+
+
+def send_prompt(window_id: int, prompt: str) -> int:
+    """Type a prompt into an agent that could not take one as an argument.
+
+    Waiting for two identical screens rather than one non-empty screen: an
+    agent's TUI paints its frame in pieces, and typing into the middle of that
+    loses the first few characters.
+    """
+    deadline = time.monotonic() + PROMPT_READY_SECONDS
+    previous = None
+    while time.monotonic() < deadline:
+        drawn = screen_text(window_id, ansi=False) or ""
+        if drawn.strip() and drawn == previous:
+            break
+        previous = drawn
+        time.sleep(PROMPT_POLL_SECONDS)
+
+    code = send_text(window_id, prompt)
+    if code == 0:
+        # A pasted prompt sits in the input until something submits it.
+        time.sleep(PROMPT_POLL_SECONDS)
+        return send_key(window_id, "enter")
+    return code
+
+
+def session_window_id(state: object, session: str) -> int | None:
+    """A window already running for this session, to open a tab beside."""
+    if not session:
+        return None
+    for agent in collect_agents(state):
+        if agent.session == session:
+            return agent.window_id
+    return None
+
+
+def kitty_session_name(state: object, window_id: int | None) -> str:
+    """The session kitty itself has a window in, which is not the same thing.
+
+    collect_agents() reads ``kitty_zoxide_session`` first, because that is the
+    name the picker gives a session and the one everything groups by. kitty
+    keeps its own membership alongside it, per window, and that is what
+    tab_bar_filter and the tab navigation actions go by.
+    """
+    if window_id is None:
+        return ""
+    window = find_window(state, window_id)
+    return clean_text(window.get("session_name")) if window else ""
+
+
+def spawn(
+    program: str,
+    *,
+    cwd: str,
+    session: str,
+    title: str | None = None,
+    prompt: str | None = None,
+    target: str = "auto",
+    parent_window_id: int | None = None,
+    focus: bool = False,
+) -> int | None:
+    """Start an agent, and hand back the window id it got.
+
+    Where it goes is the session's business: a tab beside an agent already
+    running for that session, and an OS window of its own when there is none.
+    The session rides along as a user var, which is what makes the new tab group
+    with its siblings in the sidebar, the overview and the deck alike.
+
+    The window is an agent window from the moment kitty makes it — the vars go
+    on at launch, before the child execs — so nothing has to race the agent's
+    first hook to know what it is looking at.
+    """
+    state = kitty_state()
+    sibling = None if target == "window" else session_window_id(state, session)
+    kind = "tab" if (target == "tab" or (target == "auto" and sibling)) else "os-window"
+
+    # kitty adds a new window to its source window's session only when the cwd
+    # comes from that window too, and ours never does — so a spawned window
+    # would belong to no session at all. That is not merely untidy: the tab bar
+    # is filtered on `session:~ or session:^$`, so a session-less tab shows up
+    # in every OS window's sidebar at once, and the tab navigation actions
+    # reach it from all of them. Joining by name, preferring whatever kitty
+    # already calls the session we are joining.
+    joining = kitty_session_name(state, sibling) or session
+
+    argv, leftover = agent_argv(program, prompt)
+    args = [
+        "launch",
+        "--type",
+        kind,
+        "--cwd",
+        cwd,
+        "--var",
+        f"kitty_zoxide_session={session}",
+        "--add-to-session",
+        joining,
+        "--var",
+        f"{SPAWN_VAR}={parent_window_id or 'cli'}",
+        "--var",
+        f"agent_name={program}",
+        "--var",
+        f"agent_status={STATUS_STARTING}",
+        "--var",
+        f"agent_status_at={int(time.time())}",
+    ]
+
+    # No --tab-title unless one was asked for. Claude Code writes what it is
+    # currently doing into the window title, which is what the sidebar and the
+    # overview show; pinning the tab title would trade that for the word
+    # "claude" forever.
+    if title:
+        args += ["--tab-title", title]
+
+    # The parent's environment, not kitty's. agent_program() finds the agent's
+    # own binary, but everything the agent then shells out to would inherit the
+    # desktop session's PATH — which is the one without ~/.local/bin in it.
+    if parent_window_id and find_window(state, parent_window_id) is not None:
+        args += ["--source-window", f"id:{parent_window_id}", "--copy-env"]
+        # A bare name in --env removes the variable rather than setting it.
+        for name in INHERITED_SESSION_ENV:
+            args += ["--env", name]
+
+    # launch matches *tabs*, where `id:` is a tab id — and tab ids and window
+    # ids share a number space often enough to land the tab in the wrong OS
+    # window. window_id: is the field that means what we mean.
+    if kind == "tab" and sibling:
+        args += ["--match", f"window_id:{sibling}"]
+
+    # Nobody asked to be taken somewhere else. A human spawning from the picker
+    # is looking at the window already; an agent spawning a helper is not, and
+    # stealing the cursor mid-sentence is the rudest thing this could do.
+    if not focus:
+        args.append("--dont-take-focus")
+
+    # --hold runs a shell once the agent exits, so quitting it leaves the tab
+    # standing rather than taking the window with it — and leaves its last
+    # screen readable, which is what makes `wait` worth anything.
+    args += ["--hold", *argv]
+
+    result = run_kitten(*args)
+    if result is None or result.returncode != 0:
+        if result is not None:
+            print(
+                result.stderr.strip() or "agents: failed to launch",
+                file=sys.stderr,
+            )
+        return None
+
+    try:
+        window_id = int(result.stdout.strip())
+    except ValueError:
+        return None
+
+    if leftover:
+        send_prompt(window_id, leftover)
+    return window_id
