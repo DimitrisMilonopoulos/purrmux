@@ -1,5 +1,7 @@
 #!/bin/sh
-# Open the session-picker quake dropdown. Bound to SUPER+slash.
+# Open the session-picker quake dropdown. Nothing binds it any more: SUPER+slash
+# opens the shell's session picker now (ignis/modules/session_picker), and this
+# is kept as the fallback — `quake sessions` still works by hand.
 #
 # This took the agent overview too, until that moved into the shell as an ignis
 # popup (ignis/modules/agent_deck, SUPER+O). The overview wanted to be reachable

@@ -724,6 +724,16 @@ class SessionSelection(Operation):
             log(f"Failed to parse kitty state: {exc}", self.context.debug)
             return {}
 
+        return self.open_sessions_from_state(data, known_session_names)
+
+    def open_sessions_from_state(
+        self, data: object, known_session_names: set[str]
+    ) -> dict[str, OpenSessionInfo]:
+        """Which sessions an ``ls`` shows open, and their tabs.
+
+        Split from the query so a caller holding its own connection to kitty
+        (the ignis session picker) can hand the state in.
+        """
         aggregated: dict[str, dict[str, object]] = {}
         if not isinstance(data, list):
             return {}
